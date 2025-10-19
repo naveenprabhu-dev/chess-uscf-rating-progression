@@ -11,7 +11,7 @@ from dateutil.relativedelta import relativedelta
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-RATING_MILESTONES = [400, 600, 800, 1000, 1200, 1400, 1500, 1600, 1800, 2000]
+RATING_MILESTONES = [400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]
 ACCESS_FILE = '' # Input access file name here
 START_ROW = None # Input first row in sheets with player ID/birthdate
 START_COLUMN = None # Input first empty column to start recording the USCF data
