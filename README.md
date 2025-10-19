@@ -13,5 +13,17 @@ Given a list of **USCF IDs** and **dates of birth** from a Google Sheet, this sc
 
 
 ## Using the program
-This program includes an implementation with Google Sheets
+This program includes an implementation with Google Sheets API. For the program to be able to read and modify the sheet, it requires service account credentials, see below.  
+
+### Credentials 
+- Navigate to https://developers.google.com/workspace/guides/create-credentials#service-account, and follow the instructions in the section labeled 'Create credentials for a service account.'
+- Save the given .json as a file in your cloned repository. This will serve as the access file.
+- Share your sheet with the email specified in the access file, and make sure to provide editing access. 
+
+### Configurations
+- Update config.py with the sheet name and the name of your access file.
+- Create a column with USCF IDs and a separate corresponding column with DOBs - update config.py to match.
+- Update config.py with the start row (first row of data) and the start column (where you want the data to be)
+- Run the script!
+
 

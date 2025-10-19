@@ -10,15 +10,7 @@ import gspread
 from gspread.utils import a1_to_rowcol, rowcol_to_a1
 from oauth2client.service_account import ServiceAccountCredentials
 
-RATING_MILESTONES = [400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]
-ACCESS_FILE = " " # Input access file name here
-SHEET_NAME = " " # Input sheet name here
-
-START_ROW = None # Input first row in sheets with player ID/birthdate
-START_COLUMN = None # Input first empty column (int) to start recording the USCF data
-
-DOB_COLUMN = None # Column that contains DOBs
-USCF_ID_COLUMN = None # Column that contains USCF IDs
+from config import *
 
 
 
@@ -88,7 +80,7 @@ def _validate_config():
     ]:
         if val in (None, ""):
             problems.append(f"{name} is not set.")
-    # also resolve columns early to surface errors
+    # Resolve columns to surface errors
     try: _ = _col_index(DOB_COLUMN)
     except Exception as e: problems.append(f"DOB_COLUMN invalid: {e}")
     try: _ = _col_index(USCF_ID_COLUMN)
