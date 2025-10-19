@@ -1,9 +1,9 @@
 # USCF Rating Progression Scraper
 
-**Functionality**
+## Functionality
 Given a list of **USCF IDs** and **dates of birth** from a Google Sheet, this script:
  - Scrapes each player's US Chess pages
- - Finds their first **over the board (OTB) classical tournament** and **initial rating**
+ - Finds the date of their first **over the board (OTB) classical tournament** and **initial rating**
  - Iterates through all OTB classical events until a specified cutoff date to compute for each rating milestone:
     - **Months** needed to reach milestone
     - **Games** needed to reach milestone
@@ -11,8 +11,7 @@ Given a list of **USCF IDs** and **dates of birth** from a Google Sheet, this sc
     - **Age** (in years) to reach milestone
  - Writes results back into the same Google Sheet row
 
-    
-    
 
-**Using the program**
+## Using the program
+This program includes an implementation with Google Sheets
 

@@ -1,5 +1,3 @@
-from sys import int_info
-
 import requests
 from bs4 import BeautifulSoup, Comment
 import re
@@ -8,23 +6,34 @@ import sys
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-import gspread
+import gspread 
+from gspread.utils import a1_to_rowcol, rowcol_to_a1
 from oauth2client.service_account import ServiceAccountCredentials
 
 RATING_MILESTONES = [400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200]
-ACCESS_FILE = '' # Input access file name here
+ACCESS_FILE = " " # Input access file name here
+SHEET_NAME = " " # Input sheet name here
+
 START_ROW = None # Input first row in sheets with player ID/birthdate
-START_COLUMN = None # Input first empty column to start recording the USCF data
+START_COLUMN = None # Input first empty column (int) to start recording the USCF data
+
+DOB_COLUMN = None # Column that contains DOBs
+USCF_ID_COLUMN = None # Column that contains USCF IDs
 
 
 
 def extract_date(text):
-    # Get date in YYYY-MM-DD format, which is used on US Chess
+    """
+    Get date in YYYY-MM-DD format, which is used on US Chess
+    """
     match = re.search(r"\d{4}-\d{2}-\d{2}", text)
     return match.group() if match else None
 
 
-def months_difference(date1, date2): # Months difference between two dates in YYYY-MM-DD format
+def months_difference(date1, date2): 
+    """
+    Months difference between two dates in YYYY-MM-DD format
+    """
 
     date1 = datetime.strptime(date1, "%Y-%m-%d")
     date2 = datetime.strptime(date2, "%Y-%m-%d")
@@ -40,31 +49,64 @@ def calculate_age(date_of_birth, reference_date):
 
     return age
 
+def _col_index(col):
+    """Accept 'C' or 3; return 1-based int index (C->3)."""
+    if isinstance(col, int):
+        if col < 1:
+            raise ValueError("Column indices are 1-based (>=1).")
+        return col
+    if isinstance(col, str):
+        return a1_to_rowcol(f"{col.upper()}1")[1]
+    raise TypeError("Column must be an int (1-based) or a letter like 'C'.")
 
-def get_uscf_ids(data_sheet): # Gets USCF IDs directly from Google sheets
-    all_uscf_ids = []
-    id_column = data_sheet.col_values(4)[1:]
+def _cell_a1(row, col):
+    """Row=int, col can be 'F' or 6 -> A1 cell like 'F12'."""
+    return rowcol_to_a1(row, _col_index(col))
 
-    for uscf_id in id_column:
-        if uscf_id == "":  # Stop when an empty cell is encountered
+def _read_column_until_blank(sheet, col, start_row):
+    """Read values from a column starting at start_row (1-based) until first blank."""
+    idx = _col_index(col)
+    # gspread.col_values(idx) returns the entire column starting at row 1 as a list.
+    # Convert start_row (1-based) -> list index (0-based): start_row-1
+    values = sheet.col_values(idx)[start_row-1:]
+    out = []
+    for v in values:
+        if v is None or v == "":
             break
-        all_uscf_ids.append(uscf_id)
+        out.append(v)
+    return out
 
-    return all_uscf_ids
+def _validate_config():
+    problems = []
+    for name, val in [
+        ("ACCESS_FILE", ACCESS_FILE),
+        ("SHEET_NAME", SHEET_NAME),
+        ("START_ROW", START_ROW),
+        ("START_COLUMN", START_COLUMN),
+        ("DOB_COLUMN", DOB_COLUMN),
+        ("USCF_ID_COLUMN", USCF_ID_COLUMN),
+    ]:
+        if val in (None, ""):
+            problems.append(f"{name} is not set.")
+    # also resolve columns early to surface errors
+    try: _ = _col_index(DOB_COLUMN)
+    except Exception as e: problems.append(f"DOB_COLUMN invalid: {e}")
+    try: _ = _col_index(USCF_ID_COLUMN)
+    except Exception as e: problems.append(f"USCF_ID_COLUMN invalid: {e}")
+    try: _ = _col_index(START_COLUMN)
+    except Exception as e: problems.append(f"START_COLUMN invalid: {e}")
+    if not isinstance(START_ROW, int) or START_ROW < 1:
+        problems.append("START_ROW must be a 1-based positive integer.")
+    if problems:
+        raise RuntimeError("Config error(s):\n  - " + "\n  - ".join(problems))
 
+def get_uscf_ids(data_sheet):
+    """Gets USCF IDs from the configured column, starting at START_ROW."""
+    return _read_column_until_blank(data_sheet, USCF_ID_COLUMN, START_ROW)
 
-
-def get_date_of_births(data_sheet): # Gets DOBs directly from Google sheets
-    date_of_births = []
-    dob_column = data_sheet.col_values(3)[1:]
-
-    for dob in dob_column:
-        if dob == "":  # Stop when an empty cell is encountered
-            break
-        date_of_births.append(dob)
-
-    return date_of_births
-
+def get_dobs(data_sheet):
+    """Gets DOBs from the configured column, starting at START_ROW."""
+    return _read_column_until_blank(data_sheet, DOB_COLUMN, START_ROW)
 
 
 def get_tournaments_played(session, uscf_id): # Returns total tournaments played (includes classical/rapid/blitz/online), used for navigating through user's tournaments
@@ -88,29 +130,6 @@ def get_tournaments_played(session, uscf_id): # Returns total tournaments played
         matches = re.findall(r'\d+', b_tag_tournaments_played.text)
         tournaments_played = matches[1]
         return int(tournaments_played)
-
-
-# def get_birth_year(session, uscf_id): # Returns birth year from FIDE player profile (none if no FIDE ID)
-#
-#     url = f"https://www.uschess.org/msa/MbrDtlMain.php?{uscf_id}" # Navigate to the 'General' page for a player
-#     response = session.get(url)
-#     soup = BeautifulSoup(response.text, "lxml")
-#
-#     fide_tag = soup.find("td", string=lambda text: text and "FIDE ID" in text) # Find if the text 'FIDE ID' is present for a player
-#     if fide_tag:
-#         fide_id = fide_tag.find_next_sibling("td").find("b").text.strip()
-#         url = f"https://ratings.fide.com/profile/{fide_id}" # Navigate to a player's fide page to get birth year
-#         response = session.get(url)
-#         soup = BeautifulSoup(response. text, "lxml")
-#
-#         birth_year_tag = soup.find("h5", string=lambda text: text and "B-Year" in text)
-#
-#         if birth_year_tag:
-#             birth_year = birth_year_tag.find_next_sibling("p").text.strip()
-#             return int(birth_year)
-#
-#     else:
-#         return None
 
 
 def get_name(session, uscf_id): # Returns name for any player
@@ -319,7 +338,7 @@ def scrape(session, uscf_id_list, dob_list):
 
         data_row = [date_of_first_tournament] + [initial_rating] + [age_at_first_tournament] +  rating_milestones_by_month + rating_milestones_by_games + rating_milestones_by_score + rating_milestones_by_age
         
-        cell_range = f"{chr(64 + START_COLUMN)}{row_index}"
+        cell_range = _cell_a1(row_index, START_COLUMN)
 
         sheet.update(range_name=cell_range, values=[data_row])
 
@@ -330,19 +349,17 @@ def scrape(session, uscf_id_list, dob_list):
 
 
 if __name__ == '__main__':
+    _validate_config()
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 
     creds = ServiceAccountCredentials.from_json_keyfile_name(ACCESS_FILE, scope)
 
     client = gspread.authorize(creds)
 
-    sheet = client.open("CCC_Potential_1500").sheet1
+    sheet = client.open(SHEET_NAME).sheet1
 
     uscf_ids = get_uscf_ids(sheet)
-    dobs = get_date_of_births(sheet)
-
-
-
+    dobs = get_dobs(sheet)
 
     # Open Google Sheet
 
