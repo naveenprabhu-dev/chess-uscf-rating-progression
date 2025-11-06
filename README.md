@@ -24,7 +24,8 @@ This program includes an implementation with Google Sheets API. For the program 
 - Update config.py with the sheet name and the name of your access file.
 - Create a column with USCF IDs and a separate corresponding column with DOBs - update config.py to match.
 - Update config.py with the start row (first row of data) and the start column (where you want the data to be)
+- <img width="1327" height="914" alt="Screenshot 2025-11-06 at 10 56 16 AM" src="https://github.com/user-attachments/assets/5fe9d7a6-657f-437f-a19a-8186f5762bd2" />
+- In the above example, start row = 3, start column = 'D'. 
 - Run the script!
 
-<img width="629" height="635" alt="Screenshot 2025-11-06 at 10 51 42 AM" src="https://github.com/user-attachments/assets/fbf25a91-5cde-48d8-a6fc-d285af192f9c" />
 
