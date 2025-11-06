@@ -26,4 +26,5 @@ This program includes an implementation with Google Sheets API. For the program 
 - Update config.py with the start row (first row of data) and the start column (where you want the data to be)
 - Run the script!
 
+<img width="629" height="635" alt="Screenshot 2025-11-06 at 10 51 42 AM" src="https://github.com/user-attachments/assets/fbf25a91-5cde-48d8-a6fc-d285af192f9c" />
 
