@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Milestones · USCF Insights{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Rating milestones</h1>
+  <p class="muted">These thresholds determine which rating levels the analyzer reports on.
+     USCF and FIDE use separate ladders because the rating scales are not comparable.
+     Configuration is per session — no account needed.</p>
+
+  <form method="POST" action="{{ url_for('main.settings') }}">
+    <input type="hidden" name="which" value="uscf">
+    <label>
+      USCF milestones (comma- or space-separated integers)
+      <textarea name="milestones" rows="3">{{ uscf_milestones|join(', ') }}</textarea>
+    </label>
+    <button type="submit" class="primary">Save USCF milestones</button>
+    <p class="muted small">Defaults:
+      {% for m in default_uscf %}<code>{{ m }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+    </p>
+  </form>
+</section>
+
+<section class="card">
+  <form method="POST" action="{{ url_for('main.settings') }}">
+    <input type="hidden" name="which" value="fide">
+    <label>
+      FIDE milestones (comma- or space-separated integers)
+      <textarea name="milestones" rows="3">{{ fide_milestones|join(', ') }}</textarea>
+    </label>
+    <button type="submit" class="primary">Save FIDE milestones</button>
+    <p class="muted small">Defaults:
+      {% for m in default_fide %}<code>{{ m }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+    </p>
+  </form>
+</section>
+{% endblock %}

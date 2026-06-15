@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}
+  {% if players|length == 1 %}{{ players[0].name }} — charts{% else %}Compare — USCF Insights{% endif %}
+{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>{% if players|length == 1 %}{{ players[0].name }}{% else %}Player comparison{% endif %}</h1>
+  <ul class="players-summary">
+    {% for p in players %}
+      <li>
+        <span class="swatch swatch-{{ loop.index0 }}"></span>
+        <a href="{{ url_for('main.player', source=p.source, player_id=p.player_id) }}">{{ p.name }}</a>
+        <span class="badge badge-{{ p.source }}">{{ p.source|upper }}</span>
+        <span class="muted small">{{ p.source|upper }} {{ p.player_id }} ·
+          {% if p.source == 'fide' %}first rated{% else %}first OTB{% endif %} {{ p.first_tournament_date }} ·
+          initial {{ p.initial_rating }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+  <a href="{{ url_for('main.index') }}" class="muted">← back</a>
+</section>
+
+{% if mixed_sources %}
+  <p class="banner">Comparing USCF and FIDE ratings — note the scales are not equivalent.</p>
+{% endif %}
+
+<section class="card">
+  {% set age_available = players|selectattr('dob')|list|length > 0 %}
+  {% set missing_age = players|rejectattr('dob')|list %}
+  <div class="chart-grid">
+    <div class="chart-cell"><h3>Months to reach rating</h3><div class="chart-wrap"><canvas id="chart-months"></canvas></div></div>
+    <div class="chart-cell"><h3>Games to reach rating</h3><div class="chart-wrap"><canvas id="chart-games"></canvas></div></div>
+    <div class="chart-cell{% if not age_available %} no-data{% endif %}">
+      <h3>Age at rating</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-age"></canvas>
+        {% if not age_available %}
+          <div class="no-data-msg">Birthday could not be found</div>
+        {% endif %}
+      </div>
+      {% if age_available and missing_age %}
+        <p class="chart-note muted small">
+          {{ missing_age|map(attribute='name')|join(', ') }} has no age data.
+        </p>
+      {% endif %}
+    </div>
+    <div class="chart-cell">
+      <h3>Cumulative score % at rating</h3>
+      <div class="chart-wrap">
+        <canvas id="chart-score"></canvas>
+      </div>
+    </div>
+  </div>
+  <p class="muted small">Gaps mean the player hasn't reached that milestone yet.</p>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+  const chartData = {{ chart_data|tojson }};
+  const colors = ['#6494aa', '#659b5e'];
+
+  function makeChart(canvasId, valueKey, yLabel, formatter) {
+    const ctx = document.getElementById(canvasId);
+    new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: chartData.milestones,
+        datasets: chartData.players.map((p, i) => ({
+          label: p.name + ' (' + p.source.toUpperCase() + ')',
+          data: p[valueKey],
+          borderColor: colors[i % colors.length],
+          backgroundColor: colors[i % colors.length],
+          spanGaps: true,
+          tension: 0.2,
+          pointRadius: 4,
+        })),
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: {
+          x: {
+            title: { display: true, text: 'Rating milestone', color: '#7a7373' },
+            ticks: { color: '#7a7373' },
+            grid: { color: '#e3d4b2' },
+          },
+          y: {
+            title: { display: true, text: yLabel, color: '#7a7373' },
+            ticks: { color: '#7a7373', callback: formatter },
+            grid: { color: '#e3d4b2' },
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { labels: { color: '#312f2f' } },
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${formatter(ctx.parsed.y)}` } },
+        },
+      },
+    });
+  }
+
+  const identity = (v) => v;
+  const percent = (v) => (v == null ? v : (v * 100).toFixed(1) + '%');
+
+  makeChart('chart-months', 'months', 'Months', identity);
+  makeChart('chart-games', 'games', 'Games', identity);
+  makeChart('chart-age', 'age', 'Age (years)', identity);
+  makeChart('chart-score', 'score', 'Cumulative score', percent);
+</script>
+{% endblock %}

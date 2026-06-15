@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+{% block title %}Scraping… · USCF Insights{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Scraping {{ entries|length }} {{ source|upper }} player{{ '' if entries|length == 1 else 's' }}</h1>
+  <p class="muted small">{{ source|upper }} is queried one player at a time.
+     {% if source == 'fide' %}FIDE fetches each rated period to compute scores, so the bar advances per period.{% else %}USCF can take up to a couple of minutes per player.{% endif %}
+     Stay on this page; we'll redirect you to the charts when it's done.</p>
+
+  <ul class="scrape-progress">
+    {% for uscf_id, _ in entries %}
+      <li id="progress-{{ loop.index0 }}" data-idx="{{ loop.index0 }}">
+        <div class="scrape-header">
+          <strong>Player {{ loop.index }}</strong>
+          <code>{{ uscf_id }}</code>
+          <span class="scrape-status muted small">queued</span>
+        </div>
+        <div class="progress-bar"><div class="progress-fill"></div></div>
+        <div class="progress-caption muted small">0 / —</div>
+      </li>
+    {% endfor %}
+  </ul>
+
+  <div class="progress-actions" id="progress-actions" style="display: none;">
+    <a id="progress-continue" class="primary-link" href="{{ url_for('main.index') }}">Continue</a>
+    <a href="{{ url_for('main.index') }}" class="muted small">Back to home</a>
+  </div>
+</section>
+
+<script>
+  const evt = new EventSource("{{ url_for('main.scrape_stream') }}");
+  let hadError = false;
+
+  function setStatus(idx, text) {
+    const el = document.querySelector(`#progress-${idx} .scrape-status`);
+    if (el) el.textContent = text;
+  }
+  function setFill(idx, pct) {
+    const el = document.querySelector(`#progress-${idx} .progress-fill`);
+    if (el) el.style.width = pct + '%';
+  }
+  function setCaption(idx, text) {
+    const el = document.querySelector(`#progress-${idx} .progress-caption`);
+    if (el) el.textContent = text;
+  }
+
+  evt.onmessage = (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch (err) { return; }
+    if (m.type === 'player_start') {
+      setStatus(m.player_idx, 'scraping…');
+    } else if (m.type === 'status') {
+      setStatus(m.player_idx, m.message);
+    } else if (m.type === 'progress') {
+      const pct = m.total ? Math.round(100 * m.current / m.total) : 0;
+      setFill(m.player_idx, pct);
+      setCaption(m.player_idx, `${m.current} / ${m.total} tournaments`);
+    } else if (m.type === 'player_done') {
+      setFill(m.player_idx, 100);
+      setStatus(m.player_idx, `done${m.name ? ' — ' + m.name : ''}`);
+    } else if (m.type === 'player_error') {
+      hadError = true;
+      const li = document.getElementById(`progress-${m.player_idx}`);
+      if (li) li.classList.add('progress-error');
+      setStatus(m.player_idx, `error: ${m.error}`);
+    }
+  };
+
+  evt.addEventListener('done', (e) => {
+    evt.close();
+    let data = {};
+    try { data = JSON.parse(e.data); } catch (err) {}
+    const continueLink = document.getElementById('progress-continue');
+    const actions = document.getElementById('progress-actions');
+    if (data.redirect) continueLink.href = data.redirect;
+    if (hadError || !(data.scraped_ids && data.scraped_ids.length)) {
+      actions.style.display = 'flex';
+      continueLink.textContent = (data.scraped_ids && data.scraped_ids.length)
+        ? 'Continue to charts'
+        : 'Back to home';
+    } else {
+      window.location = data.redirect;
+    }
+  });
+
+  evt.onerror = () => {
+    // EventSource will keep trying to reconnect if not closed; if we already
+    // saw `done`, evt was closed and this won't fire. Otherwise show a hint.
+    const actions = document.getElementById('progress-actions');
+    if (actions.style.display === 'none') {
+      actions.style.display = 'flex';
+      document.getElementById('progress-continue').textContent = 'Back to home';
+    }
+  };
+</script>
+{% endblock %}

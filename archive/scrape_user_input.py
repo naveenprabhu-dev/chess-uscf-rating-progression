@@ -8,7 +8,6 @@ import sys
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 RATING_MILESTONES = [600, 800, 1000, 1200, 1400, 1600, 1800, 2000]

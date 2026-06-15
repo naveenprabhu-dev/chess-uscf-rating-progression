@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+{% block title %}Analyze — USCF Insights{% endblock %}
+
+{% block content %}
+<section class="card">
+  <div class="analyze-header">
+    <h1>Analyze players</h1>
+    <div class="analyze-header-actions">
+      <a href="#" id="csv-link" class="link-button">Download CSV (selected)</a>
+      <a href="{{ url_for('main.index') }}" class="muted">← back</a>
+    </div>
+  </div>
+  <p class="muted small">Toggle players on or off to add or remove their lines from every chart. Hover a point to see the exact value. Save any chart — or all of them — as a PNG image.</p>
+  <p class="banner" id="mixed-banner" hidden>Comparing USCF and FIDE ratings — note the scales are not equivalent.</p>
+</section>
+
+<div class="analyze-layout">
+  <aside class="card analyze-picker">
+    <div class="picker-header">
+      <h2>Players</h2>
+      <div class="filter-btns" role="group" aria-label="Filter by source">
+        <button type="button" class="filter-btn active" data-filter="all">All</button>
+        <button type="button" class="filter-btn" data-filter="uscf">USCF</button>
+        <button type="button" class="filter-btn" data-filter="fide">FIDE</button>
+      </div>
+    </div>
+    <div class="picker-controls">
+      <button type="button" class="link-button" id="select-all-btn">Select all</button>
+      <button type="button" class="link-button" id="select-none-btn">Select none</button>
+    </div>
+    <p class="muted small">Library: {{ saved_count }}/{{ anon_limit }} saved. ☆ saves a player to your library; ★ is already saved.</p>
+    <ul class="picker-list" id="picker-list">
+      {% for p in chart_data.players %}
+        {% set key = p.source ~ ':' ~ p.player_id %}
+        <li class="picker-item" data-source="{{ p.source }}">
+          <label class="row-check">
+            <input type="checkbox" class="analyze-pick" value="{{ key }}"
+                   data-key="{{ key }}"
+                   {{ 'checked' if key in initial_selected else '' }}>
+            <span class="picker-swatch" data-key="{{ key }}"></span>
+            <span class="picker-name">{{ p.name }}</span>
+            <span class="badge badge-{{ p.source }}">{{ p.source|upper }}</span>
+          </label>
+          {% if key in saved_keys %}
+            <form method="POST" action="{{ url_for('main.remove_from_library') }}" class="inline picker-save">
+              <input type="hidden" name="source" value="{{ p.source }}">
+              <input type="hidden" name="player_id" value="{{ p.player_id }}">
+              <input type="hidden" name="next" value="{{ url_for('main.analyze', ids=[key]) }}">
+              <button type="submit" class="link-button" title="Remove from library">★</button>
+            </form>
+          {% else %}
+            <form method="POST" action="{{ url_for('main.save_to_library') }}" class="inline picker-save">
+              <input type="hidden" name="source" value="{{ p.source }}">
+              <input type="hidden" name="player_id" value="{{ p.player_id }}">
+              <input type="hidden" name="next" value="{{ url_for('main.analyze', ids=[key]) }}">
+              <button type="submit" class="link-button" title="Save to library">☆</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+    <p class="muted small empty-filter" id="picker-empty" hidden>No players match this filter.</p>
+  </aside>
+
+  <section class="card analyze-charts">
+    <div class="charts-toolbar">
+      <button type="button" class="primary" id="save-all-btn">Save all charts</button>
+    </div>
+    <div class="chart-grid">
+      <div class="chart-cell">
+        <div class="chart-cell-head"><h3>Months to reach rating</h3><button type="button" class="link-button save-chart" data-chart="months">Save</button></div>
+        <div class="chart-wrap"><canvas id="chart-months"></canvas></div>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-cell-head"><h3>Games to reach rating</h3><button type="button" class="link-button save-chart" data-chart="games">Save</button></div>
+        <div class="chart-wrap"><canvas id="chart-games"></canvas></div>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-cell-head"><h3>Age at rating</h3><button type="button" class="link-button save-chart" data-chart="age">Save</button></div>
+        <div class="chart-wrap"><canvas id="chart-age"></canvas></div>
+      </div>
+      <div class="chart-cell">
+        <div class="chart-cell-head"><h3>Cumulative score % at rating</h3><button type="button" class="link-button save-chart" data-chart="score">Save</button></div>
+        <div class="chart-wrap"><canvas id="chart-score"></canvas></div>
+      </div>
+    </div>
+    <p class="muted small" id="no-selection-msg">Select one or more players to chart them. Gaps mean the player hasn't reached that milestone yet.</p>
+  </section>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script>
+  const chartData = {{ chart_data|tojson }};
+  // index players by namespaced key for quick lookup
+  const playerByKey = {};
+  chartData.players.forEach(p => { playerByKey[p.source + ':' + p.player_id] = p; });
+
+  const CARD_BG = '#ffffff';
+
+  // Stable color per player key (assigned in DOM order across all charts).
+  const keysInOrder = chartData.players.map(p => p.source + ':' + p.player_id);
+  const colorByKey = {};
+  const N = Math.max(keysInOrder.length, 1);
+  keysInOrder.forEach((key, i) => {
+    colorByKey[key] = `hsl(${Math.round(i * 360 / N)}, 65%, 45%)`;
+  });
+
+  const identity = (v) => v;
+  const percent = (v) => (v == null ? v : (v * 100).toFixed(1) + '%');
+
+  // Background-fill plugin so saved PNGs aren't transparent.
+  const bgPlugin = {
+    id: 'solidBg',
+    beforeDraw: (chart) => {
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-over';
+      ctx.fillStyle = CARD_BG;
+      ctx.fillRect(0, 0, chart.width, chart.height);
+      ctx.restore();
+    },
+  };
+
+  function datasetFor(key, valueKey) {
+    const p = playerByKey[key];
+    return {
+      label: p.name + ' (' + p.source.toUpperCase() + ')',
+      data: p[valueKey],
+      borderColor: colorByKey[key],
+      backgroundColor: colorByKey[key],
+      spanGaps: true,
+      tension: 0.2,
+      pointRadius: 4,
+      pointHoverRadius: 7,
+      _playerKey: key,
+    };
+  }
+
+  const charts = {};
+  function makeChart(canvasId, valueKey, yLabel, formatter) {
+    const ctx = document.getElementById(canvasId);
+    return new Chart(ctx, {
+      type: 'line',
+      data: { labels: chartData.milestones, datasets: [] },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'nearest', intersect: false },
+        scales: {
+          x: {
+            title: { display: true, text: 'Rating milestone', color: '#7a7373' },
+            ticks: { color: '#7a7373' },
+            grid: { color: '#e3d4b2' },
+          },
+          y: {
+            title: { display: true, text: yLabel, color: '#7a7373' },
+            ticks: { color: '#7a7373', callback: formatter },
+            grid: { color: '#e3d4b2' },
+            beginAtZero: true,
+          },
+        },
+        plugins: {
+          legend: { labels: { color: '#312f2f' } },
+          tooltip: {
+            callbacks: {
+              title: (items) => items.length ? 'Rating ' + items[0].label : '',
+              label: (ctx) => `${ctx.dataset.label}: ${formatter(ctx.parsed.y)}`,
+            },
+          },
+        },
+      },
+      plugins: [bgPlugin],
+    });
+  }
+
+  charts.months = { chart: makeChart('chart-months', 'months', 'Months', identity), valueKey: 'months' };
+  charts.games  = { chart: makeChart('chart-games', 'games', 'Games', identity), valueKey: 'games' };
+  charts.age    = { chart: makeChart('chart-age', 'age', 'Age (years)', identity), valueKey: 'age' };
+  charts.score  = { chart: makeChart('chart-score', 'score', 'Cumulative score', percent), valueKey: 'score' };
+
+  function selectedKeys() {
+    return Array.from(document.querySelectorAll('.analyze-pick:checked')).map(cb => cb.dataset.key);
+  }
+
+  function refreshCharts() {
+    const keys = selectedKeys();
+    Object.values(charts).forEach(({ chart, valueKey }) => {
+      chart.data.datasets = keys.map(key => datasetFor(key, valueKey));
+      chart.update();
+    });
+    document.getElementById('no-selection-msg').hidden = keys.length > 0;
+    // Mixed-source banner from the live selection.
+    const sources = new Set(keys.map(k => k.split(':')[0]));
+    document.getElementById('mixed-banner').hidden = sources.size <= 1;
+    // CSV link reflects selection.
+    updateCsvLink(keys);
+  }
+
+  function updateCsvLink(keys) {
+    const link = document.getElementById('csv-link');
+    if (!keys.length) {
+      link.href = '{{ url_for("main.export_csv") }}';
+      link.textContent = 'Download CSV (all)';
+    } else {
+      const qs = keys.map(k => 'ids=' + encodeURIComponent(k)).join('&');
+      link.href = '{{ url_for("main.export_csv") }}?' + qs;
+      link.textContent = 'Download CSV (selected)';
+    }
+  }
+
+  // Color the swatches to match chart colors.
+  document.querySelectorAll('.picker-swatch').forEach(sw => {
+    sw.style.background = colorByKey[sw.dataset.key];
+  });
+
+  document.querySelectorAll('.analyze-pick').forEach(cb => {
+    cb.addEventListener('change', refreshCharts);
+  });
+
+  document.getElementById('select-all-btn').addEventListener('click', () => {
+    // Only select visible (filtered) rows.
+    document.querySelectorAll('.picker-item:not([hidden]) .analyze-pick').forEach(cb => { cb.checked = true; });
+    refreshCharts();
+  });
+  document.getElementById('select-none-btn').addEventListener('click', () => {
+    document.querySelectorAll('.analyze-pick').forEach(cb => { cb.checked = false; });
+    refreshCharts();
+  });
+
+  // ── Source filter ───────────────────────────────────────────────────────────
+  const pickerItems = Array.from(document.querySelectorAll('.picker-item'));
+  const pickerEmpty = document.getElementById('picker-empty');
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const f = btn.dataset.filter;
+      let shown = 0;
+      pickerItems.forEach(li => {
+        const ok = f === 'all' || li.dataset.source === f;
+        li.hidden = !ok;
+        if (ok) shown++;
+      });
+      pickerEmpty.hidden = shown > 0;
+    });
+  });
+
+  // ── Downloads ─────────────────────────────────────────────────────────────────
+  // Use a Blob + object URL (not a data:/server link) so the `download` filename —
+  // extension included — is honored across browsers, Safari included. Safari
+  // ignores `download` on data: URLs, which would drop the .png/.csv extension.
+  function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function saveChart(name) {
+    const { chart } = charts[name];
+    // The bg-fill plugin has already painted the canvas, so toBlob captures it.
+    chart.canvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, `chart-${name}.png`);
+    }, 'image/png');
+  }
+  document.querySelectorAll('.save-chart').forEach(btn => {
+    btn.addEventListener('click', () => saveChart(btn.dataset.chart));
+  });
+  document.getElementById('save-all-btn').addEventListener('click', () => {
+    ['months', 'games', 'age', 'score'].forEach((name, i) => {
+      setTimeout(() => saveChart(name), i * 300);
+    });
+  });
+
+  // CSV: fetch the server CSV as a blob and download with an explicit filename.
+  async function downloadCsv() {
+    const link = document.getElementById('csv-link');
+    const original = link.textContent;
+    link.textContent = 'Preparing…';
+    try {
+      const resp = await fetch(link.href, { headers: { 'Accept': 'text/csv' } });
+      if (!resp.ok) throw new Error('export failed');
+      downloadBlob(await resp.blob(), 'chess_players.csv');
+    } catch {
+      link.textContent = 'Download failed — retry';
+      setTimeout(() => { link.textContent = original; }, 2500);
+      return;
+    }
+    link.textContent = original;
+  }
+  document.getElementById('csv-link').addEventListener('click', (e) => {
+    e.preventDefault();
+    downloadCsv();
+  });
+
+  refreshCharts();
+</script>
+{% endblock %}

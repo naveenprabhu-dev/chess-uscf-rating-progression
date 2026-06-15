@@ -1,0 +1,602 @@
+{% extends "base.html" %}
+{% block title %}Analyze players · USCF Insights{% endblock %}
+
+{% block content %}
+<section class="hero">
+  <h1>Analyze a player's rating climb</h1>
+  <p class="muted">Pick a source, type a name or ID for each player, add a birthdate (optional), then press <strong>Analyze</strong>.
+     DOB is optional — if blank we try to pull the birth year from FIDE, otherwise age stats are skipped.
+     After analyzing, save the players you want to keep to your library (up to {{ anon_limit }} per browser).</p>
+</section>
+
+<div class="card">
+  <form method="POST" action="{{ url_for('main.scrape') }}" id="analyze-form" novalidate>
+    <fieldset class="source-toggle">
+      <legend>Rating source</legend>
+      <label class="source-option">
+        <input type="radio" name="source" value="uscf" {{ 'checked' if source != 'fide' else '' }}>
+        USCF
+      </label>
+      <label class="source-option">
+        <input type="radio" name="source" value="fide" {{ 'checked' if source == 'fide' else '' }}>
+        FIDE
+      </label>
+      <span class="muted small">All players use the selected source.</span>
+    </fieldset>
+
+    <div class="count-control">
+      <label for="player-count">How many players?
+        <input type="number" id="player-count" min="1" max="100" value="2">
+      </label>
+      <button type="button" class="link-button" id="set-count-btn">Set</button>
+      <span class="muted small">1–100. Set the count, then fill each row.</span>
+    </div>
+
+    {# Template row cloned by JS. __IDX__ is replaced with the 0-based index. #}
+    <template id="player-row-template">
+      <fieldset class="player-row">
+        <legend>Player <span class="row-number">__NUM__</span></legend>
+        <input type="hidden" name="uscf_id___IDX__" id="uscf_id___IDX__" value="">
+        <label>
+          <span class="id-label">{{ 'FIDE ID' if source == 'fide' else 'USCF ID' }} or name</span>
+          <div class="search-wrap">
+            <input type="text" class="player-search-input" id="player_search___IDX__"
+                   placeholder="{{ 'Search name or enter FIDE ID' if source == 'fide' else 'Search name or enter USCF ID' }}"
+                   data-slot="__IDX__" autocomplete="off" role="combobox"
+                   aria-expanded="false" aria-autocomplete="list"
+                   aria-controls="search-dropdown___IDX__"
+                   value="">
+            <div class="search-dropdown" id="search-dropdown___IDX__" role="listbox" hidden></div>
+          </div>
+          <span class="field-hint muted small" id="hint___IDX__"></span>
+        </label>
+        <label>
+          Date of birth <span class="muted small">(optional — for age stats)</span>
+          <input type="text" name="dob___IDX__" placeholder="MM/DD/YYYY">
+        </label>
+        <button type="button" class="link-button remove-row-btn">Remove</button>
+      </fieldset>
+    </template>
+
+    <div class="player-rows" id="player-rows"></div>
+
+    <div class="form-actions">
+      <button type="button" class="link-button" id="add-row-btn">+ Add another player</button>
+    </div>
+
+    <button type="submit" class="primary">Analyze</button>
+  </form>
+
+  {# Milestone editor lives outside the analyze <form> so the two never nest #}
+  <details class="milestone-editor" id="milestone-editor">
+    <summary>
+      <span class="me-label">Active <span id="milestone-source-label">{{ source|upper }}</span> milestones</span>
+      <span id="milestone-display-uscf" class="milestone-chips"{{ ' hidden' if source == 'fide' else '' }}>
+        {% for m in milestones_uscf %}<code>{{ m }}</code>{% endfor %}
+      </span>
+      <span id="milestone-display-fide" class="milestone-chips"{{ ' hidden' if source != 'fide' else '' }}>
+        {% for m in milestones_fide %}<code>{{ m }}</code>{% endfor %}
+      </span>
+      <span class="me-edit muted small">edit</span>
+    </summary>
+    <div class="milestone-panels">
+      <div class="milestone-panel" id="milestone-panel-uscf"{{ ' hidden' if source == 'fide' else '' }}>
+        <form class="milestone-form" data-which="uscf" action="{{ url_for('main.settings') }}" method="POST">
+          <input type="hidden" name="which" value="uscf">
+          <input type="hidden" name="next" value="/">
+          <label>USCF milestones <span class="muted small">(comma- or space-separated integers)</span>
+            <textarea name="milestones" rows="2">{{ milestones_uscf|join(', ') }}</textarea>
+          </label>
+          <div class="milestone-form-actions">
+            <button type="submit" class="primary">Save USCF</button>
+            <button type="button" class="link-button reset-milestones" data-default="{{ default_uscf|join(', ') }}">Reset to default</button>
+            <span class="save-status muted small" aria-live="polite"></span>
+          </div>
+          <p class="muted small">Default: 400 – 3000 by 100s</p>
+        </form>
+      </div>
+      <div class="milestone-panel" id="milestone-panel-fide"{{ ' hidden' if source != 'fide' else '' }}>
+        <form class="milestone-form" data-which="fide" action="{{ url_for('main.settings') }}" method="POST">
+          <input type="hidden" name="which" value="fide">
+          <input type="hidden" name="next" value="/">
+          <label>FIDE milestones <span class="muted small">(comma- or space-separated integers)</span>
+            <textarea name="milestones" rows="2">{{ milestones_fide|join(', ') }}</textarea>
+          </label>
+          <div class="milestone-form-actions">
+            <button type="submit" class="primary">Save FIDE</button>
+            <button type="button" class="link-button reset-milestones" data-default="{{ default_fide|join(', ') }}">Reset to default</button>
+            <span class="save-status muted small" aria-live="polite"></span>
+          </div>
+          <p class="muted small">Default: 1400 – 2900 by 100s</p>
+        </form>
+      </div>
+    </div>
+  </details>
+</div>
+
+{% if cached %}
+<section class="card" id="cached-section">
+  <div class="cached-header">
+    <h2>My library <span class="muted small">({{ saved_count }}/{{ anon_limit }} saved)</span></h2>
+    <div class="cached-controls">
+      <a href="{{ url_for('main.analyze', ids=cached_ids) }}"
+         class="link-button" id="analyze-all-link">Analyze all</a>
+      <a href="{{ url_for('main.export_csv') }}" class="link-button" id="index-csv-link">Download CSV</a>
+      <div class="filter-btns" role="group" aria-label="Filter by source">
+        <button type="button" class="filter-btn active" data-filter="all">All</button>
+        <button type="button" class="filter-btn" data-filter="uscf">USCF</button>
+        <button type="button" class="filter-btn" data-filter="fide">FIDE</button>
+      </div>
+      <label class="sort-control muted small">Sort
+        <select id="sort-select">
+          <option value="date-desc">Newest first</option>
+          <option value="date-asc">Oldest first</option>
+          <option value="name-asc">Name A–Z</option>
+          <option value="name-desc">Name Z–A</option>
+          <option value="rating-desc">Peak rating, high–low</option>
+          <option value="rating-asc">Peak rating, low–high</option>
+          <option value="fed-asc">Federation</option>
+        </select>
+      </label>
+    </div>
+  </div>
+
+  <form method="GET" action="{{ url_for('main.analyze') }}" id="compare-form">
+    <ul class="player-list" id="player-list">
+      {% for p in cached %}
+        <li class="player-item"
+            data-source="{{ p.source }}"
+            data-name="{{ p.name }}"
+            data-rating="{{ p.peak_rating or 0 }}"
+            data-fed="{{ p.federation or '' }}"
+            data-date="{{ p.scraped_at }}">
+          <label class="row-check">
+            <input type="checkbox" name="ids" value="{{ p.source }}:{{ p.player_id }}" class="compare-pick">
+            <a href="{{ url_for('main.player', source=p.source, player_id=p.player_id) }}">{{ p.name }}</a>
+            <span class="badge badge-{{ p.source }}">{{ p.source|upper }}</span>
+          </label>
+          <span class="muted small player-meta">
+            #{{ p.player_id }}{% if p.federation %} · {{ p.federation }}{% endif %}{% if p.peak_rating %} · reached {{ p.peak_rating }}{% endif %} · {{ p.scraped_at[:10] }}
+          </span>
+          <button type="submit" class="link-button remove-btn"
+                  form="rm-{{ p.source }}-{{ p.player_id }}"
+                  title="Remove from your library">remove</button>
+        </li>
+      {% endfor %}
+    </ul>
+    <p class="muted small empty-filter" id="empty-filter" hidden>No players match this filter.</p>
+    <div class="compare-actions">
+      <button type="submit" class="primary">Analyze selected on charts</button>
+      <button type="button" class="link-button" id="select-all-cached">Select all</button>
+      <span class="muted small">Pick any players.</span>
+    </div>
+  </form>
+
+  {# Remove forms live outside the compare form so they don't nest; linked via form= attribute. #}
+  {% for p in cached %}
+    <form id="rm-{{ p.source }}-{{ p.player_id }}" method="POST"
+          action="{{ url_for('main.remove_from_library') }}" hidden>
+      <input type="hidden" name="source" value="{{ p.source }}">
+      <input type="hidden" name="player_id" value="{{ p.player_id }}">
+      <input type="hidden" name="next" value="/">
+    </form>
+  {% endfor %}
+</section>
+{% endif %}
+
+<script>
+// ── Source toggle ─────────────────────────────────────────────────────────────
+function activeSource() {
+  const el = document.querySelector('input[name="source"]:checked');
+  return el ? el.value : 'uscf';
+}
+
+function setHint(slot, msg, isError) {
+  const hint = document.getElementById(`hint_${slot}`);
+  if (!hint) return;
+  hint.textContent = msg || '';
+  hint.classList.toggle('hint-error', !!isError);
+}
+
+function applySource(src) {
+  const fide = src === 'fide';
+  document.querySelectorAll('.id-label').forEach(el => {
+    el.textContent = (fide ? 'FIDE ID' : 'USCF ID') + ' or name';
+  });
+  document.querySelectorAll('.player-search-input').forEach(el => {
+    el.placeholder = fide ? 'Search name or enter FIDE ID' : 'Search name or enter USCF ID';
+    el.value = '';
+  });
+  document.querySelectorAll('input[id^="uscf_id_"]').forEach(el => { el.value = ''; });
+  document.querySelectorAll('.search-dropdown').forEach(dd => { dd.hidden = true; });
+  document.querySelectorAll('.field-hint').forEach(h => { h.textContent = ''; h.classList.remove('hint-error'); });
+  // Swap the milestone display + editor panel
+  document.getElementById('milestone-source-label').textContent = fide ? 'FIDE' : 'USCF';
+  document.getElementById('milestone-display-uscf').hidden = fide;
+  document.getElementById('milestone-display-fide').hidden = !fide;
+  document.getElementById('milestone-panel-uscf').hidden = fide;
+  document.getElementById('milestone-panel-fide').hidden = !fide;
+}
+
+document.querySelectorAll('input[name="source"]').forEach(r => {
+  r.addEventListener('change', () => applySource(activeSource()));
+});
+
+// ── Dynamic player rows (count-first) ─────────────────────────────────────────
+const rowsContainer = document.getElementById('player-rows');
+const rowTemplate = document.getElementById('player-row-template');
+const countInput = document.getElementById('player-count');
+
+function rowCount() { return rowsContainer.querySelectorAll('.player-row').length; }
+
+function makeRow(idx) {
+  const html = rowTemplate.innerHTML
+    .replace(/__IDX__/g, idx)
+    .replace(/__NUM__/g, idx + 1);
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html.trim();
+  return tmp.firstElementChild;
+}
+
+function reindexRows() {
+  rowsContainer.querySelectorAll('.player-row').forEach((row, i) => {
+    row.querySelector('.row-number').textContent = i + 1;
+    const hidden = row.querySelector('input[type="hidden"]');
+    hidden.name = `uscf_id_${i}`;
+    hidden.id = `uscf_id_${i}`;
+    const search = row.querySelector('.player-search-input');
+    search.id = `player_search_${i}`;
+    search.dataset.slot = i;
+    search.setAttribute('aria-controls', `search-dropdown-${i}`);
+    const dd = row.querySelector('.search-dropdown');
+    dd.id = `search-dropdown-${i}`;
+    row.querySelector('.field-hint').id = `hint_${i}`;
+    row.querySelector('input[name^="dob_"]').name = `dob_${i}`;
+  });
+}
+
+function addRow() {
+  const row = makeRow(rowCount());
+  rowsContainer.appendChild(row);
+}
+
+function setRowCount(n) {
+  n = Math.max(1, Math.min(100, n | 0 || 1));
+  let cur = rowCount();
+  // Only destroy rows when shrinking; preserve entered data when growing.
+  while (cur > n) {
+    rowsContainer.lastElementChild.remove();
+    cur--;
+  }
+  while (cur < n) {
+    addRow();
+    cur++;
+  }
+  reindexRows();
+  countInput.value = rowCount();
+}
+
+document.getElementById('set-count-btn').addEventListener('click', () => {
+  setRowCount(parseInt(countInput.value, 10));
+});
+countInput.addEventListener('change', () => setRowCount(parseInt(countInput.value, 10)));
+document.getElementById('add-row-btn').addEventListener('click', () => {
+  setRowCount(rowCount() + 1);
+});
+rowsContainer.addEventListener('click', e => {
+  const btn = e.target.closest('.remove-row-btn');
+  if (!btn) return;
+  if (rowCount() <= 1) return;          // always keep at least one row
+  btn.closest('.player-row').remove();
+  reindexRows();
+  countInput.value = rowCount();
+});
+
+// ── Live player search (event-delegated so dynamic rows work) ─────────────────
+const DEBOUNCE_MS = 280;
+const _timers = {};
+const _seq = {};          // request-sequence guard against out-of-order responses
+
+function isNumeric(s) { return /^\d+$/.test(s.trim()); }
+
+function activeOption(dropdown) { return dropdown.querySelector('.search-dropdown-item.active'); }
+
+function moveActive(dropdown, delta) {
+  const items = Array.from(dropdown.querySelectorAll('.search-dropdown-item'));
+  if (!items.length) return;
+  let idx = items.findIndex(el => el.classList.contains('active'));
+  idx = (idx + delta + items.length) % items.length;
+  items.forEach(el => el.classList.remove('active'));
+  items[idx].classList.add('active');
+  items[idx].scrollIntoView({ block: 'nearest' });
+}
+
+function chooseOption(slot, li) {
+  const input = document.getElementById(`player_search_${slot}`);
+  const hidden = document.getElementById(`uscf_id_${slot}`);
+  const dropdown = document.getElementById(`search-dropdown-${slot}`);
+  hidden.value = li.dataset.pid;
+  input.value = li.dataset.name;
+  input.setAttribute('aria-expanded', 'false');
+  dropdown.hidden = true;
+  setHint(slot, `Selected #${li.dataset.pid}`, false);
+}
+
+async function runSearch(slot) {
+  const input = document.getElementById(`player_search_${slot}`);
+  const hidden = document.getElementById(`uscf_id_${slot}`);
+  const dropdown = document.getElementById(`search-dropdown-${slot}`);
+  const q = input.value.trim();
+
+  if (isNumeric(q)) {
+    hidden.value = q;
+    dropdown.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    setHint(slot, '', false);
+    return;
+  }
+  if (q.length < 2) {
+    dropdown.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  const mySeq = (_seq[slot] = (_seq[slot] || 0) + 1);
+  dropdown.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  dropdown.innerHTML = '<p class="muted small search-hint">Searching…</p>';
+
+  const src = activeSource();
+  try {
+    const resp = await fetch(`/api/search?source=${src}&q=${encodeURIComponent(q)}`);
+    if (mySeq !== _seq[slot]) return;   // a newer search superseded this one
+    const data = await resp.json();
+    if (!resp.ok || !data.results || !data.results.length) {
+      dropdown.innerHTML = `<p class="muted small search-hint">No matches for "${q}".</p>`;
+      return;
+    }
+    const ul = document.createElement('ul');
+    ul.className = 'search-dropdown-list';
+    data.results.slice(0, 12).forEach(p => {
+      const pid = src === 'fide' ? p.fide_id : p.uscf_id;
+      const li = document.createElement('li');
+      li.className = 'search-dropdown-item';
+      li.setAttribute('role', 'option');
+      li.dataset.pid = pid;
+      li.dataset.name = p.name;
+
+      const name = document.createElement('span');
+      name.className = 'dropdown-name';
+      name.textContent = p.name;
+
+      const idCode = document.createElement('code');
+      idCode.className = 'dropdown-id';
+      idCode.textContent = pid;
+
+      const meta = document.createElement('span');
+      meta.className = 'dropdown-meta muted small';
+      if (src === 'fide') {
+        meta.textContent = [p.title, p.fed, p.std].filter(Boolean).join(' · ');
+      } else {
+        meta.textContent = [p.rating, p.state].filter(Boolean).join(' · ');
+      }
+
+      li.appendChild(name);
+      li.appendChild(idCode);
+      li.appendChild(meta);
+      li.addEventListener('mousedown', e => { e.preventDefault(); chooseOption(slot, li); });
+      ul.appendChild(li);
+    });
+    dropdown.innerHTML = '';
+    dropdown.appendChild(ul);
+  } catch {
+    if (mySeq !== _seq[slot]) return;
+    dropdown.innerHTML = '<p class="muted small search-hint">Search failed.</p>';
+  }
+}
+
+// Delegated input handler
+rowsContainer.addEventListener('input', e => {
+  const input = e.target.closest('.player-search-input');
+  if (!input) return;
+  const slot = input.dataset.slot;
+  const hidden = document.getElementById(`uscf_id_${slot}`);
+  const dropdown = document.getElementById(`search-dropdown-${slot}`);
+  clearTimeout(_timers[slot]);
+  const q = input.value.trim();
+  hidden.value = '';                   // any edit invalidates a prior selection
+  if (isNumeric(q)) {
+    hidden.value = q;
+    dropdown.hidden = true;
+    setHint(slot, '', false);
+    return;
+  }
+  setHint(slot, '', false);
+  if (q.length < 2) { dropdown.hidden = true; return; }
+  _timers[slot] = setTimeout(() => runSearch(slot), DEBOUNCE_MS);
+});
+
+// Delegated keyboard nav
+rowsContainer.addEventListener('keydown', e => {
+  const input = e.target.closest('.player-search-input');
+  if (!input) return;
+  const slot = input.dataset.slot;
+  const dropdown = document.getElementById(`search-dropdown-${slot}`);
+  if (dropdown.hidden) return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); moveActive(dropdown, 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); moveActive(dropdown, -1); }
+  else if (e.key === 'Enter') {
+    const li = activeOption(dropdown);
+    if (li) { e.preventDefault(); chooseOption(slot, li); }
+  } else if (e.key === 'Escape') {
+    dropdown.hidden = true;
+    input.setAttribute('aria-expanded', 'false');
+  }
+});
+
+// Close dropdowns on outside click
+document.addEventListener('click', e => {
+  document.querySelectorAll('.search-dropdown').forEach(dd => {
+    const wrap = dd.closest('.search-wrap');
+    if (wrap && !wrap.contains(e.target)) dd.hidden = true;
+  });
+});
+
+// Validate on submit: a typed name must resolve to a selected ID.
+document.getElementById('analyze-form').addEventListener('submit', e => {
+  let ok = true, anyFilled = false;
+  rowsContainer.querySelectorAll('.player-search-input').forEach(input => {
+    const slot = input.dataset.slot;
+    const hidden = document.getElementById(`uscf_id_${slot}`);
+    const raw = input.value.trim();
+    if (!raw) return;                  // empty rows are fine
+    anyFilled = true;
+    if (isNumeric(raw)) { hidden.value = raw; return; }
+    if (!hidden.value) {
+      ok = false;
+      setHint(slot, 'Pick a player from the suggestions, or enter a numeric ID.', true);
+    }
+  });
+  if (!anyFilled) {
+    ok = false;
+    setHint(0, 'Enter at least one player.', true);
+  }
+  if (!ok) e.preventDefault();
+});
+
+// Render the initial rows (respect any prefill passed from a "Use as player" link).
+(function initRows() {
+  const prefill = {{ prefill|tojson }};
+  const prefillIdxs = Object.keys(prefill).map(Number);
+  const maxPrefill = prefillIdxs.length ? Math.max(...prefillIdxs) + 1 : 0;
+  setRowCount(Math.max(2, maxPrefill));
+  for (const [idx, pid] of Object.entries(prefill)) {
+    const search = document.getElementById(`player_search_${idx}`);
+    const hidden = document.getElementById(`uscf_id_${idx}`);
+    if (search && hidden) { search.value = pid; hidden.value = pid; }
+  }
+})();
+
+// ── Inline milestone editor: AJAX save (no page reload) ───────────────────────
+document.querySelectorAll('.milestone-form').forEach(form => {
+  const which = form.dataset.which;
+  const textarea = form.querySelector('textarea');
+  const status = form.querySelector('.save-status');
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    status.textContent = 'Saving…';
+    status.classList.remove('save-error');
+    try {
+      const resp = await fetch(form.action, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
+        body: new FormData(form),
+      });
+      const data = await resp.json();
+      if (!resp.ok || !data.ok) {
+        status.textContent = data.error || 'Save failed.';
+        status.classList.add('save-error');
+        return;
+      }
+      // Reflect saved values back into the textarea + the summary chips
+      textarea.value = data.values.join(', ');
+      const chips = document.getElementById(`milestone-display-${which}`);
+      chips.innerHTML = data.values.map(v => `<code>${v}</code>`).join('');
+      status.textContent = 'Saved ✓';
+      setTimeout(() => { status.textContent = ''; }, 2500);
+    } catch {
+      status.textContent = 'Save failed.';
+      status.classList.add('save-error');
+    }
+  });
+
+  const resetBtn = form.querySelector('.reset-milestones');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => { textarea.value = resetBtn.dataset.default; });
+  }
+});
+
+// ── Previously analyzed: sort + filter ───────────────────────────────────────
+{% if cached %}
+const playerList = document.getElementById('player-list');
+const emptyMsg = document.getElementById('empty-filter');
+const allItems = Array.from(playerList.querySelectorAll('.player-item'));
+let activeFilter = 'all';
+let activeSort = 'date-desc';
+
+function renderList() {
+  let items = allItems.filter(li => activeFilter === 'all' || li.dataset.source === activeFilter);
+  items.sort((a, b) => {
+    switch (activeSort) {
+      case 'date-asc':    return a.dataset.date.localeCompare(b.dataset.date);
+      case 'date-desc':   return b.dataset.date.localeCompare(a.dataset.date);
+      case 'name-asc':    return a.dataset.name.localeCompare(b.dataset.name);
+      case 'name-desc':   return b.dataset.name.localeCompare(a.dataset.name);
+      case 'rating-desc': return Number(b.dataset.rating) - Number(a.dataset.rating);
+      case 'rating-asc':  return Number(a.dataset.rating) - Number(b.dataset.rating);
+      case 'fed-asc':     return (a.dataset.fed || '~').localeCompare(b.dataset.fed || '~')
+                              || a.dataset.name.localeCompare(b.dataset.name);
+      default: return 0;
+    }
+  });
+  allItems.forEach(li => { li.hidden = true; });
+  items.forEach(li => { li.hidden = false; playerList.appendChild(li); });
+  emptyMsg.hidden = items.length > 0;
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    activeFilter = btn.dataset.filter;
+    renderList();
+  });
+});
+
+document.getElementById('sort-select').addEventListener('change', e => {
+  activeSort = e.target.value;
+  renderList();
+});
+
+// Select all cached players (ticks every checkbox for the Analyze form).
+const selectAllCached = document.getElementById('select-all-cached');
+if (selectAllCached) {
+  selectAllCached.addEventListener('click', () => {
+    document.querySelectorAll('.compare-pick').forEach(cb => { cb.checked = true; });
+  });
+}
+
+// CSV download via Blob so the .csv extension is honored across browsers (Safari
+// drops the filename when downloading a server/data link directly).
+const indexCsvLink = document.getElementById('index-csv-link');
+if (indexCsvLink) {
+  indexCsvLink.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const original = indexCsvLink.textContent;
+    indexCsvLink.textContent = 'Preparing…';
+    try {
+      const resp = await fetch(indexCsvLink.href, { headers: { 'Accept': 'text/csv' } });
+      if (!resp.ok) throw new Error('export failed');
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chess_players.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch {
+      indexCsvLink.textContent = 'Download failed — retry';
+      setTimeout(() => { indexCsvLink.textContent = original; }, 2500);
+      return;
+    }
+    indexCsvLink.textContent = original;
+  });
+}
+
+renderList();
+{% endif %}
+</script>
+{% endblock %}

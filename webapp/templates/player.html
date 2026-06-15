@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}{{ player.name }} · USCF Insights{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>{{ player.name }}
+    <span class="badge badge-{{ player.source }}">{{ player.source|upper }}</span>
+  </h1>
+  <dl class="meta">
+    {% if player.source == 'fide' %}
+      <dt>FIDE ID</dt><dd>{{ player.fide_id }}</dd>
+      {% if player.country %}<dt>Federation</dt><dd>{{ player.country }}</dd>{% endif %}
+    {% else %}
+      <dt>USCF ID</dt><dd>{{ player.uscf_id }}</dd>
+    {% endif %}
+    {% if player.dob %}
+      <dt>Date of birth</dt>
+      <dd>
+        {{ player.dob }}
+        {% if player.dob_source == 'fide' %}
+          <span class="muted small">(FIDE birth year)</span>
+        {% endif %}
+      </dd>
+    {% else %}
+      <dt>Date of birth</dt><dd class="muted">not on file — age stats unavailable</dd>
+    {% endif %}
+    <dt>{% if player.source == 'fide' %}First rated period{% else %}First classical tournament{% endif %}</dt>
+    <dd>{{ player.first_tournament_date }}</dd>
+    {% if player.age_at_first_tournament is not none %}
+      <dt>Age at first {% if player.source == 'fide' %}rating{% else %}tournament{% endif %}</dt>
+      <dd>{{ player.age_at_first_tournament }}</dd>
+    {% endif %}
+    <dt>Initial rating</dt><dd>{{ player.initial_rating }}</dd>
+    <dt>Scraped at</dt><dd>{{ player.scraped_at[:19].replace('T', ' ') }} UTC</dd>
+  </dl>
+
+  {% if player.source == 'fide' %}
+    <p class="muted small note-fide">FIDE rating history starts at the first published rating,
+       not the first event. Periods were quarterly through 2011, monthly since 2013 — so
+       "months to milestone" is bucketed to ±3 months for older periods. Cumulative score %
+       is reconstructed from FIDE's per-period calculation pages.</p>
+  {% endif %}
+
+  {% set this_next = '/player/' ~ player.source ~ '/' ~ player.player_id %}
+  {% if is_saved %}
+    <form method="POST" action="{{ url_for('main.remove_from_library') }}" class="inline">
+      <input type="hidden" name="source" value="{{ player.source }}">
+      <input type="hidden" name="player_id" value="{{ player.player_id }}">
+      <input type="hidden" name="next" value="{{ this_next }}">
+      <button type="submit" class="link-button">★ Saved — remove from library</button>
+    </form>
+  {% else %}
+    <form method="POST" action="{{ url_for('main.save_to_library') }}" class="inline">
+      <input type="hidden" name="source" value="{{ player.source }}">
+      <input type="hidden" name="player_id" value="{{ player.player_id }}">
+      <input type="hidden" name="next" value="{{ this_next }}">
+      <button type="submit" class="primary">☆ Save to library ({{ saved_count }}/{{ anon_limit }})</button>
+    </form>
+  {% endif %}
+  <form method="POST" action="{{ url_for('main.refresh_player', source=player.source, player_id=player.player_id) }}" class="inline">
+    <button type="submit" class="link-button">Refresh from {{ player.source|upper }}</button>
+  </form>
+  <a href="{{ url_for('main.compare', ids=[player.source ~ ':' ~ player.player_id]) }}">View charts</a>
+  <a href="{{ url_for('main.index') }}" class="muted">← back</a>
+</section>
+
+{% if stale %}
+  <div class="banner">
+    This view uses a different milestone ladder than your current one.
+    <form method="POST" action="{{ url_for('main.apply_milestones', source=player.source, player_id=player.player_id) }}" class="inline">
+      <button type="submit" class="link-button">Apply current milestones (no re-scrape)</button>
+    </form>
+  </div>
+{% endif %}
+
+{% include "_milestone_table.html" %}
+{% endblock %}

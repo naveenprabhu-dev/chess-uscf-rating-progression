@@ -1,9 +1,10 @@
-RATING_MILESTONES = [400, 600, 800, 1000, 1200, 1400, 1600, 1800, 2000, 2200] # Edit to your needs 
-ACCESS_FILE = " " # Input access file name here
-SHEET_NAME = " " # Input sheet name here
+DEFAULT_USCF_MILESTONES = list(range(400, 3100, 100))   # 400, 500, …, 3000
+DEFAULT_FIDE_MILESTONES = list(range(1400, 3000, 100))  # 1400, 1500, …, 2900
 
-START_ROW = None # Input first row (integer) in sheets with player ID/birthdate
-START_COLUMN = " " # Input first empty column to start recording the USCF data
+# Back-compat alias — existing code/imports expect DEFAULT_RATING_MILESTONES.
+DEFAULT_RATING_MILESTONES = DEFAULT_USCF_MILESTONES
 
-DOB_COLUMN = " " # Column that contains DOBs
-USCF_ID_COLUMN = " " # Column that contains USCF IDs
+# Spec 007 — saved-analysis limits. Anonymous (cookie-only) users may keep a
+# small library; signing in (a later phase) raises the cap. Easy to tune here.
+ANON_SAVE_LIMIT = 5
+USER_SAVE_LIMIT = 100

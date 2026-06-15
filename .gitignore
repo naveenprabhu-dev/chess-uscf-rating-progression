@@ -1,2 +1,8 @@
 path_to_service_account.json
 .idea/*
+__pycache__/
+*.pyc
+instance/
+.DS_Store
+.vscode/
+.playwright-mcp/

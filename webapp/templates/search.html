@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Search players · USCF Insights{% endblock %}
+
+{% block content %}
+<section class="card">
+  <h1>Search by name</h1>
+  <form method="GET" action="{{ url_for('main.search') }}" class="search-form">
+    <fieldset class="source-toggle">
+      <label class="source-option">
+        <input type="radio" name="source" value="uscf" {{ 'checked' if source != 'fide' else '' }}> USCF
+      </label>
+      <label class="source-option">
+        <input type="radio" name="source" value="fide" {{ 'checked' if source == 'fide' else '' }}> FIDE
+      </label>
+    </fieldset>
+    <input type="text" name="q" placeholder="e.g. Carlsen, or Hikaru Nakamura" value="{{ query }}"
+           autofocus autocomplete="off">
+    <button type="submit" class="primary">Search</button>
+  </form>
+  {% if error %}<p class="flash flash-error">{{ error }}</p>{% endif %}
+  <p class="muted small">Hits {{ source|upper }}'s player-search; up to 20 results.</p>
+</section>
+
+{% if query and not error %}
+  <section class="card">
+    {% if results %}
+      <h2>{{ results|length }} match{{ '' if results|length == 1 else 'es' }}</h2>
+      {% if source == 'fide' %}
+        <table class="search-results">
+          <thead>
+            <tr><th>Name</th><th>FIDE ID</th><th>Title</th><th>Fed</th><th>Std</th><th>Rpd</th><th>Blz</th><th>B-Year</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for r in results %}
+              <tr>
+                <td>{{ r.name }}</td>
+                <td><code>{{ r.fide_id }}</code></td>
+                <td>{{ r.title }}</td>
+                <td>{{ r.fed }}</td>
+                <td>{{ r.std }}</td>
+                <td>{{ r.rpd }}</td>
+                <td>{{ r.blz }}</td>
+                <td>{{ r.b_year }}</td>
+                <td class="actions">
+                  <a href="{{ url_for('main.index', source='fide', id=r.fide_id, slot=0) }}">Use as Player 1</a>
+                  <a href="{{ url_for('main.index', source='fide', id=r.fide_id, slot=1) }}">Use as Player 2</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <table class="search-results">
+          <thead>
+            <tr><th>Name</th><th>USCF ID</th><th>Rating</th><th>State</th><th>Expires</th><th></th></tr>
+          </thead>
+          <tbody>
+            {% for r in results %}
+              <tr>
+                <td>{{ r.name }}</td>
+                <td><code>{{ r.uscf_id }}</code></td>
+                <td>{{ r.rating }}</td>
+                <td>{{ r.state }}</td>
+                <td>{{ r.expires }}</td>
+                <td class="actions">
+                  <a href="{{ url_for('main.index', source='uscf', id=r.uscf_id, slot=0) }}">Use as Player 1</a>
+                  <a href="{{ url_for('main.index', source='uscf', id=r.uscf_id, slot=1) }}">Use as Player 2</a>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% endif %}
+    {% else %}
+      <p class="muted">No results for "{{ query }}".</p>
+    {% endif %}
+  </section>
+{% endif %}
+{% endblock %}
