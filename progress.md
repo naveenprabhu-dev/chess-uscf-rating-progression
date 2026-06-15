@@ -578,3 +578,10 @@ Separated the two concepts the app had fused (expensive raw scrape vs. per-user 
 Firebase Phases 2–4: `webapp/auth.py`, `/auth/session`, `static/auth.js`, `login.html`, the 100-cap
 for logged-in users, `users`/`saved_analyses` **writes**, and anon→uid migration. Tables exist but
 are unused (anon path is cookie-only). CLAUDE.md updated to describe the new cache/library model.
+
+## 2026-06-15 — README rewrite + repo published
+- Rewrote `README.md` for the Flask web app (USCF/FIDE input, milestone insights,
+  caching, compare) — dropped the old Google Sheets instructions.
+- Added `.vscode/` and `.playwright-mcp/` to `.gitignore` (editor/tool caches).
+- Committed the full web-app conversion and pushed to `origin/main` (rebased onto
+  6 remote README/screenshot commits; kept the new README + config.py).
