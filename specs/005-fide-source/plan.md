@@ -24,6 +24,7 @@ The endpoint evidence behind every claim below is in [`research.md`](research.md
 - A standalone "all-FIDE" comparison route. Mixing in `/compare` covers both cases with one route.
 - Real-time autocomplete on the search box. `/api/search?source=fide&q=...` returns JSON; UI integration stays the same as USCF.
 - Migration of the existing cache. The SQLite DB lives in gitignored `instance/` and has no users; the cache will be dropped and rebuilt on first run of the new schema. Flash a one-time notice if old rows are detected.
+- Pre-2003 **score%** and **per-game / per-tournament** FIDE history. Neither was ever published and neither is reconstructable. The planned OlimpBase backfill (Phase 6) adds pre-2003 **rating + per-period games only**; `score_pct` stays `None` before 2003.
 
 ## Target state
 
@@ -200,7 +201,7 @@ invalidate(source, player_id) -> None
 
 - **Index form**: each row gains two radio buttons (USCF default). USCF rows show the existing 8-digit hint; FIDE rows show "5–10 digits, FIDE ID". DOB field stays optional for both — the FIDE B-Year fallback already works on USCF rows, and FIDE rows can use it too (the player profile we already hit is the same one).
 - **Settings page**: two `<textarea>`s under labeled sections, "USCF milestones" and "FIDE milestones". Each posts independently. Don't merge into one global list — the rating scales aren't comparable.
-- **Player page**: a `<span class="badge">USCF</span>` or `<span class="badge">FIDE</span>` next to the name. When `source == "fide"`, add a small note: "FIDE rating history starts at the first published rating, not the first event. Periods were quarterly through 2011, monthly since 2013." When `source == "fide"`, the milestone table hides the Score column (the `_milestone_table.html` partial already takes a `show_age` flag — add a parallel `show_score`).
+- **Player page**: a `<span class="badge">USCF</span>` or `<span class="badge">FIDE</span>` next to the name. When `source == "fide"`, add a small note: "FIDE rating history starts at the first published rating, not the first event. Periods were quarterly through 2011, monthly since 2013." When `source == "fide"`, the milestone table hides the Score column (the `_milestone_table.html` partial already takes a `show_age` flag — add a parallel `show_score`). *Once Phase 6 lands,* extend this note: pre-2003 rows come from OlimpBase's reconstructed lists (coarser cadence — annual/semiannual/quarterly; no `score_pct`; possible pre-1990 data-quality issues), and for veterans the initial rating/date shift back to the first OlimpBase-listed rating.
 - **Search page**: a source toggle above the query input. USCF results show the existing columns. FIDE results show `Name / FIDE ID / Title / Fed / Std / Rpd / Blz / B-Year` with "Use as Player 1/2" links that also propagate `source=fide` to the index prefill.
 - **Compare**: when `players` contains both sources, render `<p class="banner">Comparing USCF and FIDE ratings — note the scales are not equivalent.</p>` above the chart grid. When *all* players are FIDE, mark the Score `chart-cell` with the existing `no-data` class so the overlay & blur kick in.
 
@@ -251,6 +252,49 @@ Update every template that referenced `player.uscf_id` to use `player.source` + 
 ### Phase 5 — Polish & docs
 
 Update `progress.md` with a §10 once code lands (this spec's §9 entry covers planning only). Update `CLAUDE.md` to canonicalize the new dict shape and the `(source, player_id)` cache key. Add a short "FIDE source" subsection to `docs/scraping.md` mirroring the format of the existing USCF section.
+
+### Phase 6 — Pre-2003 backfill via OlimpBase (added 2026-06-17, code deferred)
+
+FIDE's `a_chart_data.phtml` truncates at `2003-Apr` for **every** player — confirmed against Kasparov,
+FIDE-rated since 1979, whose chart's earliest entry is `2003-Apr` @ 2830 (his 1979–2003 run, incl. the
+2851 peak, is gone). See `research.md` §"What's NOT available" and §"Pre-2003 history via OlimpBase".
+**Effect today:** any milestone a player crossed before 2003 (most of a veteran's ladder) resolves to
+`None` — no date, games, or age. OlimpBase (1971–2001) is the fill. This phase is planned only; no code
+lands until it's scheduled.
+
+**Integration shape**
+
+- New `scraper/olimpbase.py` returning rows in the existing timeline `events` shape
+  (`{date: "YYYY-MM-01", rating: int, period_games: int}`), **prepended** to the FIDE timeline inside
+  `fetch_fide_history` (or a thin wrapper around it) *before* `compute_record` runs. The public dict shape
+  is unchanged.
+- `score_numerator` / `score_games` are `None` for every pre-2003 event → `score_pct` is `None` pre-2003.
+  This is already handled per-cell (CLAUDE.md FIDE rules), so no template change is required.
+- **Cumulative games must thread across the 2001→2003 boundary:** OlimpBase gives per-period games; sum
+  them, then continue the running total into the FIDE periods so `cumulative_games` is continuous over the
+  whole career.
+- **Merge is clean:** OlimpBase ≤2001 and FIDE ≥2003-Apr don't overlap → concatenate. The 2002 lists are
+  absent from both per-player sources; note the one-year gap on the player page (optionally fill later from
+  OlimpBase's 2002–2009 bulk file).
+- For veterans this shifts `initial_rating` / `first_tournament_date` back to the **first OlimpBase-listed
+  rating** (e.g. Kasparov 1979 @ 2545 instead of 2003 @ 2830) — closer to a true initial rating, though
+  still a published-list value, not post-first-event.
+
+**Access method — recommended: live per-player fetch, cached.** Timelines are already cached
+(`CACHE_TTL_DAYS`) and pre-2003 data is immutable, so each player's card is fetched once at scrape time and
+merged into the cached timeline — low-volume and polite. Resolve the card by `name` (already present in the
+FIDE chart payload), and confirm the right player via the FIDE ID OlimpBase rows carry from 1990 on.
+**Alternative:** one-time ingest of the OlimpBase bulk file (1967–2001, ~5 MB) into a local table keyed by
+`(fide_id|name, date)` — more robust/polite at scale but needs a bulk-format parser and ~5 MB stored.
+*Decision to confirm at implementation; start with live-scrape.*
+
+**Verification (for the eventual code)**
+
+- `scrape_fide_player(make_session(), "4100018")` (via the `compute_record` path) yields milestones whose
+  lower thresholds (e.g. `2400` / `2500`) resolve to 1980s/90s dates from OlimpBase rather than `None` or
+  2003-era dates.
+- `score_pct` is `None` for every pre-2003 milestone and unchanged (real) for ≥2003 ones.
+- Cumulative `games` is monotonic and continuous across the OlimpBase→FIDE boundary (no reset at 2003).
 
 ## Cross-cutting risks
 

@@ -9,7 +9,7 @@ from flask import (
     render_template, request, session, stream_with_context, url_for,
 )
 
-from config import ANON_SAVE_LIMIT
+from config import ANON_SAVE_LIMIT, CACHE_TTL_DAYS
 from scraper import (
     DEFAULT_USCF_MILESTONES, DEFAULT_FIDE_MILESTONES,
     make_session, compute_record, fetch_history, fetch_fide_history,
@@ -18,7 +18,7 @@ from scraper import (
 from scraper.core import NoClassicalTournaments, PlayerNotFound
 from scraper.fide import FideNoRatedHistory, FidePlayerNotFound, FideScrapeError
 
-from .cache import get_timeline, save_timeline
+from .cache import get_timeline, is_timeline_stale, save_timeline
 from .forms import normalize_source, parse_milestones, parse_player_inputs
 
 bp = Blueprint("main", __name__)
@@ -141,15 +141,14 @@ def _valid_source_or_404(source):
 
 @bp.route("/")
 def index():
-    source = _active_source()
+    # FIDE is temporarily disabled in the analyze UI ("coming soon"), so the form
+    # is USCF-only for now. (Existing FIDE entries in a user's library still render
+    # via their own per-entry source — this only pins the form + milestone view.)
+    source = "uscf"
+    session["source"] = source
     prefill = {}
     pid = request.args.get("id", "").strip()
     slot = request.args.get("slot", "0").strip()
-    # A search "Use as Player N" link can also flip the active source.
-    src_arg = request.args.get("source", "").strip().lower()
-    if src_arg in VALID_SOURCES:
-        session["source"] = src_arg
-        source = src_arg
     if pid:
         try:
             slot_int = max(0, min(1, int(slot)))
@@ -177,6 +176,10 @@ def index():
 @bp.route("/scrape", methods=["POST"])
 def scrape():
     source = normalize_source(request.form.get("source"))
+    if source == "fide":
+        # FIDE is disabled in the UI for now; ignore any crafted fide submission.
+        flash("FIDE analysis is coming soon — analyzing with USCF for now.", "info")
+        source = "uscf"
     session["source"] = source
     entries, errors = parse_player_inputs(request.form, source)
     for err in errors:
@@ -245,14 +248,20 @@ def scrape_stream():
                         })
                     q.put({"type": "player_start", "player_idx": idx, "uscf_id": player_id})
                     try:
-                        # Already cached → reuse the raw timeline, no network
+                        # Fresh cache hit → reuse the raw timeline, no network
                         # (spec 007 Part 7: only brand-new players trigger a
-                        # scrape; /refresh is the explicit re-scrape path).
+                        # scrape). A cache older than CACHE_TTL_DAYS is re-scraped
+                        # here so new tournaments show up — the only re-scrape path.
                         timeline = get_timeline(source, player_id)
-                        if timeline is not None:
+                        if timeline is not None and not is_timeline_stale(timeline, CACHE_TTL_DAYS):
                             status_cb("Already analyzed — using cached data (no re-scrape).")
                             cb(1, 1)
                         else:
+                            if timeline is not None:
+                                status_cb(
+                                    f"Cached data is over {CACHE_TTL_DAYS} days old — "
+                                    "re-scraping for the latest ratings."
+                                )
                             timeline = _fetch_timeline(source, player_id,
                                                        progress_cb=cb, status_cb=status_cb)
                             save_timeline(timeline)
@@ -319,23 +328,6 @@ def player(source, player_id):
         saved_count=len(_saved()),
         anon_limit=ANON_SAVE_LIMIT,
     )
-
-
-@bp.route("/player/<source>/<player_id>/refresh", methods=["POST"])
-def refresh_player(source, player_id):
-    _valid_source_or_404(source)
-    if get_timeline(source, player_id) is None:
-        abort(404)
-    try:
-        timeline = _fetch_timeline(source, player_id)
-        save_timeline(timeline)
-        flash(f"Refreshed {player_id}.", "info")
-    except (PlayerNotFound, NoClassicalTournaments,
-            FidePlayerNotFound, FideNoRatedHistory, FideScrapeError) as e:
-        flash(str(e), "error")
-    except Exception as e:
-        flash(f"Refresh failed: {e}", "error")
-    return redirect(url_for("main.player", source=source, player_id=player_id))
 
 
 @bp.route("/player/<source>/<player_id>/apply-milestones", methods=["POST"])

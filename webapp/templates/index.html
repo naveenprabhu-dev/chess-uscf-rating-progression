@@ -14,14 +14,14 @@
     <fieldset class="source-toggle">
       <legend>Rating source</legend>
       <label class="source-option">
-        <input type="radio" name="source" value="uscf" {{ 'checked' if source != 'fide' else '' }}>
+        <input type="radio" name="source" value="uscf" checked>
         USCF
       </label>
-      <label class="source-option">
-        <input type="radio" name="source" value="fide" {{ 'checked' if source == 'fide' else '' }}>
-        FIDE
+      <label class="source-option source-option-disabled" title="FIDE support is coming soon">
+        <input type="radio" name="source" value="fide" disabled>
+        FIDE <span class="coming-soon-tag">coming soon</span>
       </label>
-      <span class="muted small">All players use the selected source.</span>
+      <span class="muted small">USCF only for now — FIDE support is on the way.</span>
     </fieldset>
 
     <div class="count-control">
@@ -29,7 +29,36 @@
         <input type="number" id="player-count" min="1" max="100" value="2">
       </label>
       <button type="button" class="link-button" id="set-count-btn">Set</button>
-      <span class="muted small">1–100. Set the count, then fill each row.</span>
+      <button type="button" class="link-button" id="bulk-toggle-btn"
+              aria-expanded="false" aria-controls="bulk-panel">Paste a list</button>
+      <span class="muted small">1–100. Set the count and fill each row, or paste a whole list.</span>
+    </div>
+
+    {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
+       then "Fill rows" pairs them by position and populates the rows below. #}
+    <div class="bulk-panel" id="bulk-panel" hidden>
+      <div class="bulk-cols">
+        <label class="bulk-col" for="bulk-ids">USCF IDs
+          <span class="muted small">— one per line (or comma/space separated)</span>
+          <textarea id="bulk-ids" rows="6" spellcheck="false"
+            placeholder="12345678&#10;87654321&#10;13572468"></textarea>
+        </label>
+        <label class="bulk-col" for="bulk-dobs">Birthdays <span class="muted small">(optional)</span>
+          <span class="muted small">— MM/DD/YYYY, same order as the IDs</span>
+          <textarea id="bulk-dobs" rows="6" spellcheck="false"
+            placeholder="01/15/2010&#10;02/20/2011&#10;(leave blank to skip a player)"></textarea>
+        </label>
+      </div>
+      <p class="muted small">
+        Birthdays are matched to IDs <strong>by position</strong>: the 1st birthday pairs with the
+        1st ID, and so on. Birthdays are optional, but any you include must be MM/DD/YYYY.
+        This replaces the rows below.
+      </p>
+      <div class="bulk-actions">
+        <button type="button" class="primary" id="bulk-fill-btn">Fill rows</button>
+        <button type="button" class="link-button" id="bulk-cancel-btn">Cancel</button>
+        <span class="field-hint bulk-status" id="bulk-status" aria-live="polite"></span>
+      </div>
     </div>
 
     {# Template row cloned by JS. __IDX__ is replaced with the 0-based index. #}
@@ -52,11 +81,20 @@
         </label>
         <label>
           Date of birth <span class="muted small">(optional — for age stats)</span>
-          <input type="text" name="dob___IDX__" placeholder="MM/DD/YYYY">
+          <input type="text" name="dob___IDX__" class="dob-input" placeholder="MM/DD/YYYY">
+          <span class="field-hint dob-hint"></span>
         </label>
         <button type="button" class="link-button remove-row-btn">Remove</button>
       </fieldset>
     </template>
+
+    {# Paginates the rows: only PAGE_SIZE players are shown at once. Hidden rows
+       stay in the DOM (display:none still submits) so all players are analyzed. #}
+    <div class="row-pager" id="row-pager" hidden>
+      <button type="button" class="link-button" id="prev-page-btn">← Previous 5</button>
+      <span class="muted small" id="pager-label"></span>
+      <button type="button" class="link-button" id="next-page-btn">Next 5 →</button>
+    </div>
 
     <div class="player-rows" id="player-rows"></div>
 
@@ -122,11 +160,6 @@
       <a href="{{ url_for('main.analyze', ids=cached_ids) }}"
          class="link-button" id="analyze-all-link">Analyze all</a>
       <a href="{{ url_for('main.export_csv') }}" class="link-button" id="index-csv-link">Download CSV</a>
-      <div class="filter-btns" role="group" aria-label="Filter by source">
-        <button type="button" class="filter-btn active" data-filter="all">All</button>
-        <button type="button" class="filter-btn" data-filter="uscf">USCF</button>
-        <button type="button" class="filter-btn" data-filter="fide">FIDE</button>
-      </div>
       <label class="sort-control muted small">Sort
         <select id="sort-select">
           <option value="date-desc">Newest first</option>
@@ -164,7 +197,6 @@
         </li>
       {% endfor %}
     </ul>
-    <p class="muted small empty-filter" id="empty-filter" hidden>No players match this filter.</p>
     <div class="compare-actions">
       <button type="submit" class="primary">Analyze selected on charts</button>
       <button type="button" class="link-button" id="select-all-cached">Select all</button>
@@ -222,10 +254,12 @@ document.querySelectorAll('input[name="source"]').forEach(r => {
   r.addEventListener('change', () => applySource(activeSource()));
 });
 
-// ── Dynamic player rows (count-first) ─────────────────────────────────────────
+// ── Dynamic player rows (count-first, shown PAGE_SIZE at a time) ──────────────
 const rowsContainer = document.getElementById('player-rows');
 const rowTemplate = document.getElementById('player-row-template');
 const countInput = document.getElementById('player-count');
+const PAGE_SIZE = 5;
+let currentPage = 0;
 
 function rowCount() { return rowsContainer.querySelectorAll('.player-row').length; }
 
@@ -255,6 +289,32 @@ function reindexRows() {
   });
 }
 
+// Show only the current page of PAGE_SIZE rows; the rest stay in the DOM (so they
+// still submit) but are hidden. The pager bar only appears when there's >1 page.
+function pageOf(rowIndex) { return Math.floor(rowIndex / PAGE_SIZE); }
+
+function renderPage() {
+  const rows = rowsContainer.querySelectorAll('.player-row');
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  currentPage = Math.min(Math.max(0, currentPage), pages - 1);
+  const start = currentPage * PAGE_SIZE;
+  const end = Math.min(start + PAGE_SIZE, total);
+  rows.forEach((row, i) => {
+    row.classList.toggle('row-hidden', i < start || i >= end);
+  });
+  const pager = document.getElementById('row-pager');
+  pager.hidden = total <= PAGE_SIZE;
+  if (!pager.hidden) {
+    document.getElementById('pager-label').textContent =
+      `Players ${start + 1}–${end} of ${total}`;
+    document.getElementById('prev-page-btn').disabled = currentPage === 0;
+    document.getElementById('next-page-btn').disabled = currentPage >= pages - 1;
+  }
+}
+
+function goToPage(p) { currentPage = p; renderPage(); }
+
 function addRow() {
   const row = makeRow(rowCount());
   rowsContainer.appendChild(row);
@@ -274,14 +334,20 @@ function setRowCount(n) {
   }
   reindexRows();
   countInput.value = rowCount();
+  renderPage();
 }
 
 document.getElementById('set-count-btn').addEventListener('click', () => {
+  currentPage = 0;
   setRowCount(parseInt(countInput.value, 10));
 });
-countInput.addEventListener('change', () => setRowCount(parseInt(countInput.value, 10)));
+countInput.addEventListener('change', () => {
+  currentPage = 0;
+  setRowCount(parseInt(countInput.value, 10));
+});
 document.getElementById('add-row-btn').addEventListener('click', () => {
   setRowCount(rowCount() + 1);
+  goToPage(pageOf(rowCount() - 1));     // jump to the page holding the new row
 });
 rowsContainer.addEventListener('click', e => {
   const btn = e.target.closest('.remove-row-btn');
@@ -290,6 +356,174 @@ rowsContainer.addEventListener('click', e => {
   btn.closest('.player-row').remove();
   reindexRows();
   countInput.value = rowCount();
+  renderPage();
+});
+
+document.getElementById('prev-page-btn').addEventListener('click', () => goToPage(currentPage - 1));
+document.getElementById('next-page-btn').addEventListener('click', () => goToPage(currentPage + 1));
+
+// DOB fields: clear the red flag while editing, re-validate (and flag the future) on blur.
+rowsContainer.addEventListener('input', e => {
+  const dob = e.target.closest('input[name^="dob_"]');
+  if (dob) clearDobError(dob);
+});
+rowsContainer.addEventListener('focusout', e => {
+  const dob = e.target.closest('input[name^="dob_"]');
+  if (dob) validateDobField(dob);
+});
+
+// ── Bulk add: two pasted lists (all IDs, all birthdays) paired by position ────
+function normalizeDob(raw) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(raw.trim());
+  if (!m) return null;
+  const mo = +m[1], d = +m[2], y = +m[3];
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(y, mo - 1, d);          // reject impossible dates (e.g. 02/30)
+  if (dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return `${pad(mo)}/${pad(d)}/${y}`;          // normalize to MM/DD/YYYY
+}
+
+// "MM/DD/YYYY" (already format-validated) → true if strictly after today.
+function isFutureDob(norm) {
+  const [mo, d, y] = norm.split('/').map(Number);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return new Date(y, mo - 1, d) > today;
+}
+
+// ── Per-row DOB field validation (the "normal feature") ──────────────────────
+function dobHintEl(input) { const l = input.closest('label'); return l && l.querySelector('.dob-hint'); }
+
+function clearDobError(input) {
+  input.classList.remove('input-error');
+  const hint = dobHintEl(input);
+  if (hint) { hint.textContent = ''; hint.classList.remove('hint-error'); }
+}
+
+function markDobError(input, msg) {
+  input.classList.add('input-error');
+  const hint = dobHintEl(input);
+  if (hint) { hint.textContent = msg; hint.classList.add('hint-error'); }
+}
+
+// Empty (optional) or a valid, non-future date → OK. Normalizes the field on success.
+function validateDobField(input) {
+  const raw = input.value.trim();
+  if (!raw) { clearDobError(input); return true; }
+  const norm = normalizeDob(raw);
+  if (!norm) { markDobError(input, 'Use MM/DD/YYYY.'); return false; }
+  if (isFutureDob(norm)) { markDobError(input, 'This birthday is in the future — not a viable birthday.'); return false; }
+  if (norm !== raw) input.value = norm;
+  clearDobError(input);
+  return true;
+}
+
+function tokenizeList(text) {
+  return text.split(/[\s,]+/).map(t => t.trim()).filter(Boolean);
+}
+
+// Pair the two lists by position. Malformed IDs/birthdays are hard errors (block
+// the fill). A count mismatch is a WARNING that names the unpaired entries but
+// still fills what it can: extra IDs get no birthday; extra birthdays are dropped.
+function parseBulkTwo(idText, dobText) {
+  const idToks = tokenizeList(idText);
+  const dobToks = tokenizeList(dobText);
+  const errors = [];
+  const warnings = [];
+
+  idToks.forEach((t, i) => {
+    if (!/^\d+$/.test(t)) errors.push(`ID #${i + 1} ("${t}") isn't a number.`);
+    else if (t.length !== 8) errors.push(`ID #${i + 1} ("${t}") isn't a valid 8-digit USCF ID.`);
+  });
+
+  const dobs = dobToks.map((t, i) => {
+    const norm = normalizeDob(t);
+    if (!norm) { errors.push(`Birthday #${i + 1} ("${t}") isn't a valid MM/DD/YYYY date.`); return null; }
+    if (isFutureDob(norm)) { errors.push(`Birthday #${i + 1} (${norm}) is in the future — not a viable birthday.`); return null; }
+    return norm;
+  });
+
+  if (idToks.length === 0) errors.push('Enter at least one USCF ID.');
+
+  // Birthdays are optional, so an empty birthday box is fine. Only warn when both
+  // lists have entries but the counts differ — and say exactly who is unpaired.
+  if (idToks.length && dobToks.length && idToks.length !== dobToks.length) {
+    if (idToks.length > dobToks.length) {
+      const extra = idToks.slice(dobToks.length)
+        .map((t, k) => `#${dobToks.length + k + 1} (${t})`).join(', ');
+      warnings.push(`${idToks.length} IDs but ${dobToks.length} birthdays — these IDs will have no birthday: ${extra}.`);
+    } else {
+      const extra = dobToks.slice(idToks.length)
+        .map((t, k) => `#${idToks.length + k + 1} (${t})`).join(', ');
+      warnings.push(`${dobToks.length} birthdays but ${idToks.length} IDs — these birthdays have no ID and will be dropped: ${extra}.`);
+    }
+  }
+
+  const players = idToks.map((id, i) => ({ id, dob: dobs[i] || '' }));
+  return { players, errors, warnings };
+}
+
+function fillRows(players) {
+  setRowCount(players.length);
+  players.forEach((p, i) => {
+    const search = document.getElementById(`player_search_${i}`);
+    const hidden = document.getElementById(`uscf_id_${i}`);
+    const dob = document.querySelector(`[name="dob_${i}"]`);
+    if (search) search.value = p.id;
+    if (hidden) hidden.value = p.id;
+    if (dob) dob.value = p.dob || '';
+    setHint(i, `Entered #${p.id}`, false);
+  });
+  goToPage(0);                                 // show the first page after a fill
+}
+
+const bulkPanel = document.getElementById('bulk-panel');
+const bulkToggle = document.getElementById('bulk-toggle-btn');
+const bulkStatus = document.getElementById('bulk-status');
+
+function openBulk(open) {
+  bulkPanel.hidden = !open;
+  bulkToggle.setAttribute('aria-expanded', String(open));
+  if (open) document.getElementById('bulk-ids').focus();
+}
+
+bulkToggle.addEventListener('click', () => openBulk(bulkPanel.hidden));
+document.getElementById('bulk-cancel-btn').addEventListener('click', () => openBulk(false));
+
+document.getElementById('bulk-fill-btn').addEventListener('click', () => {
+  const { players, errors, warnings } = parseBulkTwo(
+    document.getElementById('bulk-ids').value,
+    document.getElementById('bulk-dobs').value,
+  );
+  bulkStatus.classList.remove('hint-error', 'hint-warning');
+  if (errors.length) {
+    const shown = errors.slice(0, 4).join(' ');
+    const more = errors.length > 4 ? ` (+${errors.length - 4} more)` : '';
+    bulkStatus.textContent = shown + more;
+    bulkStatus.classList.add('hint-error');
+    return;
+  }
+  if (!players.length) {
+    bulkStatus.textContent = 'No USCF IDs found. Enter at least one.';
+    bulkStatus.classList.add('hint-error');
+    return;
+  }
+  if (players.length > 100) {
+    bulkStatus.textContent = `Too many players (${players.length}). The maximum is 100.`;
+    bulkStatus.classList.add('hint-error');
+    return;
+  }
+  fillRows(players);
+  if (warnings.length) {
+    // Rows are filled, but the counts didn't match — keep the panel open with the
+    // warning so the user sees exactly which entries were left unpaired.
+    bulkStatus.textContent = warnings.join(' ');
+    bulkStatus.classList.add('hint-warning');
+  } else {
+    bulkStatus.textContent = '';
+    openBulk(false);
+  }
 });
 
 // ── Live player search (event-delegated so dynamic rows work) ─────────────────
@@ -442,26 +676,56 @@ document.addEventListener('click', e => {
   });
 });
 
-// Validate on submit: a typed name must resolve to a selected ID.
+// Validate on submit: EVERY row must have a USCF ID — an empty row must be filled
+// or removed (we don't silently skip it). A typed name must resolve to a selected
+// ID, and birthdays must be valid + not in the future. A failing row may be on a
+// hidden page, so jump to the first one so the user can see the note.
 document.getElementById('analyze-form').addEventListener('submit', e => {
-  let ok = true, anyFilled = false;
-  rowsContainer.querySelectorAll('.player-search-input').forEach(input => {
+  let ok = true, firstErrorSlot = null;
+  const noteError = slot => {
+    slot = Number(slot);
+    if (firstErrorSlot === null || slot < firstErrorSlot) firstErrorSlot = slot;
+    ok = false;
+  };
+  const inputs = Array.from(rowsContainer.querySelectorAll('.player-search-input'));
+  const filledCount = inputs.filter(i => i.value.trim()).length;
+
+  inputs.forEach(input => {
     const slot = input.dataset.slot;
     const hidden = document.getElementById(`uscf_id_${slot}`);
     const raw = input.value.trim();
-    if (!raw) return;                  // empty rows are fine
-    anyFilled = true;
+    if (!raw) {
+      // Unpopulated row: force the user to fill it or remove it before analyzing.
+      noteError(slot);
+      setHint(slot, filledCount === 0
+        ? 'Enter a USCF ID to analyze.'
+        : 'Empty row — enter a USCF ID, or click Remove if not adding another player.', true);
+      return;
+    }
     if (isNumeric(raw)) { hidden.value = raw; return; }
     if (!hidden.value) {
-      ok = false;
+      noteError(slot);
       setHint(slot, 'Pick a player from the suggestions, or enter a numeric ID.', true);
     }
   });
-  if (!anyFilled) {
-    ok = false;
-    setHint(0, 'Enter at least one player.', true);
+  // Reject malformed or future birthdays (the field is flagged red by validateDobField).
+  rowsContainer.querySelectorAll('input[name^="dob_"]').forEach(dobInput => {
+    if (!validateDobField(dobInput)) noteError(dobInput.name.slice(4));   // "dob_".length === 4
+  });
+
+  if (!ok) {
+    if (firstErrorSlot !== null) goToPage(pageOf(firstErrorSlot));
+    e.preventDefault();
   }
-  if (!ok) e.preventDefault();
+});
+
+// Pressing Enter in a text field must NOT start the analysis — only the Analyze
+// button submits. Textareas keep Enter for newlines; the search dropdown's
+// Enter-to-select still runs via its own handler (which fires first, on bubble).
+document.getElementById('analyze-form').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
+    e.preventDefault();
+  }
 });
 
 // Render the initial rows (respect any prefill passed from a "Use as player" link).
@@ -517,16 +781,14 @@ document.querySelectorAll('.milestone-form').forEach(form => {
   }
 });
 
-// ── Previously analyzed: sort + filter ───────────────────────────────────────
+// ── Previously analyzed: sort ─────────────────────────────────────────────────
 {% if cached %}
 const playerList = document.getElementById('player-list');
-const emptyMsg = document.getElementById('empty-filter');
 const allItems = Array.from(playerList.querySelectorAll('.player-item'));
-let activeFilter = 'all';
 let activeSort = 'date-desc';
 
 function renderList() {
-  let items = allItems.filter(li => activeFilter === 'all' || li.dataset.source === activeFilter);
+  const items = allItems.slice();
   items.sort((a, b) => {
     switch (activeSort) {
       case 'date-asc':    return a.dataset.date.localeCompare(b.dataset.date);
@@ -540,19 +802,8 @@ function renderList() {
       default: return 0;
     }
   });
-  allItems.forEach(li => { li.hidden = true; });
-  items.forEach(li => { li.hidden = false; playerList.appendChild(li); });
-  emptyMsg.hidden = items.length > 0;
+  items.forEach(li => { playerList.appendChild(li); });
 }
-
-document.querySelectorAll('.filter-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-    btn.classList.add('active');
-    activeFilter = btn.dataset.filter;
-    renderList();
-  });
-});
 
 document.getElementById('sort-select').addEventListener('change', e => {
   activeSort = e.target.value;

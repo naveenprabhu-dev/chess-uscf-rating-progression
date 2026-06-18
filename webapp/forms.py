@@ -43,9 +43,11 @@ def validate_dob(raw, required=False):
             return None, "DOB is required."
         return None, None
     try:
-        datetime.strptime(s, "%m/%d/%Y")
+        parsed = datetime.strptime(s, "%m/%d/%Y")
     except ValueError:
         return None, "DOB must be in MM/DD/YYYY format."
+    if parsed.date() > datetime.now().date():
+        return None, "This birthday is in the future — not a viable birthday."
     return s, None
 
 

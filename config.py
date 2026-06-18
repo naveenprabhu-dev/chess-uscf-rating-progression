@@ -8,3 +8,9 @@ DEFAULT_RATING_MILESTONES = DEFAULT_USCF_MILESTONES
 # small library; signing in (a later phase) raises the cap. Easy to tune here.
 ANON_SAVE_LIMIT = 5
 USER_SAVE_LIMIT = 100
+
+# Cache freshness. A cached scrape older than this is re-scraped on the next
+# analyze (USCF/FIDE publish new tournaments, so stale rows would show old
+# ratings). This is the only re-scrape path for an already-cached player. Set to
+# 0 (or None) to disable expiry and keep cached timelines indefinitely.
+CACHE_TTL_DAYS = 7

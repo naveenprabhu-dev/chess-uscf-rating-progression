@@ -80,6 +80,58 @@ This is what `scraper.fide.get_fide_calculations` consumes to compute a real `sc
 ## What's NOT available
 
 - **Pre-rated history** — FIDE only starts tracking once a player has a published rating. Carlsen's first entry is already `2356` with 19 games (those 19 games happened *before* he was rated). `initial_rating` for FIDE therefore semantically means "first published rating", not "rating after first event ever". USCF doesn't have this gap.
+- **Pre-2003 history via FIDE's own endpoints** — `a_chart_data.phtml` returns periods only from `2003-Apr` onward, for **every** player, regardless of when they were first rated. This is a server-side floor, *not* the per-player "pre-rated" gap above. Evidence: Kasparov (`4100018`, FIDE-rated since 1979, peak 2851 in Jul 1999) — his chart is 211 periods, **earliest `2003-Apr` @ 2830**; the entire 1979–2003 run, including the 2851 peak, is absent. There is no API parameter that reaches further back. The fill for 1971–2001 is OlimpBase — see the next section.
+
+## Pre-2003 history via OlimpBase (added 2026-06-17)
+
+FIDE's own endpoints stop at `2003-Apr` (see above). The only accessible reconstruction of the earlier
+lists is **OlimpBase** (`olimpbase.org`), which republishes the full FIDE rating lists **1971–2001** with
+**per-player cards**. Plain HTML, no Cloudflare. Verified Kasparov's card runs **Jul 1979 → Oct 2001**.
+
+### Endpoints
+
+- **Per-player card** (keyed by *name*, not FIDE ID):
+  ```
+  GET https://www.olimpbase.org/Elo/player/<LETTER>/<Surname>,%20<Given>.html
+  ```
+  `<LETTER>` = first letter of the surname. One HTML `<table>`, one row per published list, oldest-first.
+  Columns: `List(date) | Position(world rank) | Player ID | Name | Title | Fed | Rating | +/-(change) |
+  Games(this period) | Birthday | Sex | Flag`.
+  Verified Kasparov rows (verbatim):
+  ```
+  [Jul 1979]   x          Kasparov, Garry        URS  2545                 <- no FIDE ID pre-1990
+  [Oct 2001]   1  4100018 Kasparov, Garry    g   RUS  2838   0    0        <- FIDE ID present from 1990
+  ```
+- **Alphabetical directory** — `https://www.olimpbase.org/Elo/players-all.html`, columns
+  `Player_ID | Name(→card) | Fed | born`. Useful for resolving a name/FIDE-ID to a card URL.
+- **Bulk downloads** (alternative to per-player scraping, from the summary page
+  `https://www.olimpbase.org/Elo/summary.html`): source data **1967–2001 (~5 MB)** and **2002–2009 (~38 MB)**.
+
+### What it gives / doesn't give
+
+- **Gives:** rating per list; **games-played per period** (NOT cumulative — sum to get cumulative); a
+  FIDE-ID anchor **from 1990 on** (e.g. `4100018`).
+- **Does NOT give:** `score_pct` — no W/D/L was recorded anywhere pre-2003; and no individual
+  games/tournaments — the USCF-style per-event crosstable history never existed for FIDE pre-2003.
+
+### Publication cadence (precision impact)
+
+```
+1971-1980 : annual (mostly Jul)
+1981-1999 : semiannual (Jan / Jul)
+2000-2001 : quarterly
+```
+
+So pre-2000 "months to milestone" carries ±6–12 month error — coarser than the ±3 months noted for the
+quarterly FIDE era below.
+
+### Caveats
+
+- **Data quality:** OlimpBase openly flags pre-1990 manual-compilation errors (dupes, misspellings,
+  nonexistent players). FIDE IDs exist only from 1990, so pre-1990 rows show `x` instead of an ID — match
+  by name + federation and confirm against the FIDE ID where present.
+- **~2002 gap:** per-player cards end Oct 2001; the FIDE chart starts `2003-Apr`. The 2002 lists live only
+  in OlimpBase's 2002–2009 *bulk* file, not the per-player HTML.
 
 ## Period cadence over time
 
@@ -100,14 +152,14 @@ FIDE has had floors (1000, later 1400 in March 2024). The current USCF default l
 
 ## Coverage summary
 
-| Milestone column | Source       | FIDE? |
-| ---------------- | ------------ | ----- |
-| `months`         | period dates | ✓     |
-| `games`          | cumulative `period_games` | ✓ |
-| `age`            | `B-Year` (year-only) | ✓ |
-| `score_pct`      | per-period W/D/L via `a_indv_calculation.php` | ✓ (corrected — see endpoint #4) |
+| Milestone column | FIDE ≥2003 (`ratings.fide.com`) | FIDE <2003 (OlimpBase) |
+| ---------------- | ------------------------------- | ---------------------- |
+| `months`         | ✓ (period dates)                | ✓ (coarse: annual/semiannual/quarterly) |
+| `games`          | ✓ (cumulative `period_games`)   | ✓ (per-period games, summable) |
+| `age`            | ✓ (`B-Year`, year-only)         | ✓ (`B-Year` / card Birthday) |
+| `score_pct`      | ✓ (per-period W/D/L via `a_indv_calculation.php`) | ✗ (no W/D/L recorded pre-2003) |
 
-All four columns. The earlier conclusion that FIDE could only fill 3 of 4 (and the resulting Score-chart "blur + overlay" treatment) was based on the now-corrected assumption that W/D/L was unavailable. FIDE records now carry real `score_pct`, and the Score chart renders normally for all-FIDE comparisons.
+For the ≥2003 era, all four columns. The earlier conclusion that FIDE could only fill 3 of 4 (and the resulting Score-chart "blur + overlay" treatment) was based on the now-corrected assumption that W/D/L was unavailable. FIDE records now carry real `score_pct`, and the Score chart renders normally for all-FIDE comparisons. For the <2003 era backfilled from OlimpBase, three of four columns are fillable — `score_pct` stays `None` (handled per-cell already).
 
 ## Reproducing the probes
 
@@ -134,4 +186,15 @@ curl -sL -A "$UA" \
 
 # Profile (for B-Year)
 curl -sL -A "$UA" "https://ratings.fide.com/profile/1503014"
+
+# Demonstrates the 2003 floor: Kasparov was FIDE-rated from 1979, yet the chart's
+# earliest period is "2003-Apr" @ 2830 — his 1979-2003 history (incl. the 2851 peak) is absent.
+curl -sL -A "$UA" \
+  -H "X-Requested-With: XMLHttpRequest" \
+  -H "Referer: https://ratings.fide.com/profile/4100018/chart" \
+  "https://ratings.fide.com/a_chart_data.phtml?event=4100018&period=" \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d),'periods; earliest',d[0]['date_2'],d[0]['rating'])"
+
+# Pre-2003 fill: OlimpBase per-player card (Kasparov), runs Jul 1979 -> Oct 2001
+curl -sL -A "$UA" "https://www.olimpbase.org/Elo/player/K/Kasparov,%20Garry.html"
 ```

@@ -585,3 +585,243 @@ are unused (anon path is cookie-only). CLAUDE.md updated to describe the new cac
 - Added `.vscode/` and `.playwright-mcp/` to `.gitignore` (editor/tool caches).
 - Committed the full web-app conversion and pushed to `origin/main` (rebased onto
   6 remote README/screenshot commits; kept the new README + config.py).
+
+## 2026-06-17 — Paste-a-list bulk input + FIDE temporarily disabled (UI only)
+User asked for a button to paste a whole list of USCF IDs + birthdays at once (instead of
+filling each row by hand), and to gray out FIDE as "coming soon". Web/UI layer only — no
+`scraper/` internals, record dict shape, or cache schema touched.
+
+**`webapp/templates/index.html`**
+- New **"Paste a list"** button (next to "Set") toggles a `#bulk-panel` textarea. New JS helpers:
+  - `parseBulk(text)` — tokenizes on commas/spaces/newlines. A purely-numeric token is a USCF ID;
+    a token containing `/` is a birthday that attaches to the preceding ID (birthdays optional).
+    Returns `{players, errors}`.
+  - `normalizeDob(raw)` — accepts `M/D/YYYY` or `MM/DD/YYYY`, rejects impossible dates via a
+    round-trip `new Date(...)` check (`02/30`, `13/40` → error), and **normalizes to `MM/DD/YYYY`**.
+  - `fillRows(players)` — calls existing `setRowCount` then fills `player_search_N` / `uscf_id_N` /
+    `dob_N`. `openBulk(bool)` toggles the panel + focus.
+  - "Fill rows" blocks on any error (bad date, non-8-digit ID, orphan date, junk token, >100
+    players) and reports them in `#bulk-status`; on success fills rows and auto-closes the panel.
+- No new server route: it just populates the existing rows, so the `/scrape` →
+  `parse_player_inputs` validation/dedup path is unchanged.
+- FIDE radio is now `disabled` with a "coming soon" pill; USCF is always `checked`; source note
+  updated to "USCF only for now — FIDE support is on the way."
+
+**`webapp/routes.py`**
+- `index()` pins the rendered form `source` to `"uscf"` (a stale `session["source"] == "fide"` can
+  no longer flip the form into FIDE labels/milestones); dropped the old `?source=` flip.
+- `scrape()` defensively coerces a crafted `source=fide` POST back to `uscf` with an info flash.
+- **Left intact** (re-enable FIDE later by reverting just these): the FIDE scraper, `/api/search`,
+  `/search`, and the library FIDE filter/badges. Only *selecting* FIDE as a scrape source is gone.
+
+**`webapp/static/styles.css`**
+- `.source-option-disabled` (muted, `not-allowed` cursor) + `.coming-soon-tag` pill;
+  `.bulk-panel` / `.bulk-actions` / `.bulk-status` (surface-tint panel, monospace textarea).
+
+**Verification (Playwright MCP, Chromium):** `parseBulk` checked over 7 inputs (mixed separators,
+`M/D/YYYY` normalization, `02/30`/`13/40` rejection, short ID, junk, orphan date) — all correct.
+End-to-end: paste → fill → 3 rows (2 normalized DOBs, 1 blank), panel auto-closes, FIDE `disabled`,
+USCF `checked`. Screenshot `bulk-add-feature.png`. Only console error is the pre-existing favicon 404.
+
+### 2026-06-17 (follow-up) — two-list bulk input + 5-per-page rows
+User feedback on the above: split the single textarea into **two separate lists** (paste all IDs in
+one box, all birthdays in another), keep the autofill button, **show only 5 players at a time** with
+a back/forward pager (so 100 players don't flood the page), and on a count mismatch **say so and name
+the unpaired ID/birthday**. Still UI-only (`webapp/templates/index.html` + `static/styles.css`).
+
+- **Two lists, paired by position.** Replaced the interleaved `parseBulk` with `parseBulkTwo(idText,
+  dobText)` + `tokenizeList`. IDs box `#bulk-ids`, birthdays box `#bulk-dobs`; both tokenize on
+  commas/spaces/newlines and pair index-for-index. Birthdays normalize to `MM/DD/YYYY`.
+  - Hard errors (non-8-digit/non-numeric ID, invalid birthday, zero IDs) → red status, block fill.
+  - **Count mismatch → amber warning, not a block.** Empty birthday box is fine (optional). When both
+    lists are non-empty and lengths differ, it fills what it can and names the unpaired entries:
+    extra IDs (`#N (id)`) get no birthday; extra birthdays (`#N (date)`) are dropped. Panel stays
+    open on a warning; auto-closes on a clean fill.
+- **Pagination (`PAGE_SIZE = 5`).** New `#row-pager` (← Previous 5 / `Players X–Y of N` / Next 5 →).
+  `renderPage()` toggles `.row-hidden` (`display:none`) on out-of-page rows; hidden rows **stay in
+  the DOM so they still submit** (verified: 12-player fill → all 12 `uscf_id_*` in FormData).
+  Wired into `setRowCount` / remove / `fillRows`; "Add another player" jumps to the new row's page;
+  "Set" + fill reset to page 1. Submit validator jumps to the first errored row's page so its hint
+  is visible even on a hidden page.
+- CSS: `.bulk-cols`/`.bulk-col` (two side-by-side textareas, wrap on narrow), `.hint-warning`
+  (`#9a6a00`), `.player-row.row-hidden { display:none }`, `.row-pager` (centered, disabled-dim).
+
+**Verification (Playwright MCP, Chromium):** `parseBulkTwo` over 6 input pairs (clean 3+3; 3/2 and
+2/3 mismatches naming the right entry; IDs-only no-warning; bad-ID+bad-date blocked; empty-IDs
+blocked) — all correct. Pagination 12 players: pages `1–5 / 6–10 / 11–12 of 12`, correct disabled
+states, back/forward works, all 12 IDs submit. Warning amber `rgb(154,106,0)`, panel stays open;
+two textareas side-by-side; pager hidden at ≤5 players. (Screenshot tool hit a transient font-load
+timeout; visuals confirmed via computed styles.)
+
+### 2026-06-17 (follow-up 2) — future-birthday guard (not viable)
+User feedback: when a pasted/typed birthday is past the current date, notify them it's not viable
+and highlight it red. Today is read live (`new Date()` client, `datetime.now()` server).
+
+- **`webapp/templates/index.html`** — new `isFutureDob(norm)` (strictly-after-today; today is OK).
+  - Bulk: `parseBulkTwo` adds a hard error `Birthday #N (MM/DD/YYYY) is in the future — not a viable
+    birthday.` → blocks the fill (red status), alongside the existing malformed-date check.
+  - Per-row "normal feature": each `.dob-input` validates on `focusout` (`validateDobField` +
+    `markDobError`/`clearDobError`/`dobHintEl`). A future/malformed date adds `.input-error` (red)
+    and a `.dob-hint` message; the `input` handler clears it while editing; a valid date is
+    normalized to `MM/DD/YYYY` in place. Added a `.dob-hint` span to the row template.
+  - Submit: the analyze-form validator now runs `validateDobField` over every `dob_*`, blocks on
+    any failure, flags the field red, and jumps to the first offending row's page.
+- **`webapp/forms.py`** — `validate_dob` also rejects `parsed.date() > datetime.now().date()` with
+  the same message (defense for crafted POSTs; today accepted, strictly-future not).
+- **`webapp/static/styles.css`** — `input[type="text"].input-error{,:focus}` (red border + `#fdecea`).
+
+**Verification (Playwright MCP, Chromium, today=2026-06-17):** Bulk `12/25/2030` → blocked, status
+`Birthday #2 (12/25/2030) is in the future — not a viable birthday.`, nothing filled. Per-row: typing
+`12/25/2030` + blur → `.input-error` red (`rgb(192,57,43)`) + hint shown; submit blocked
+(`defaultPrevented`); fixing to `3/9/2012` clears the flag and normalizes to `03/09/2012`. Server
+unit: future→error, today/past→accepted, blank→optional, bad-format→format error.
+
+### 2026-06-17 (follow-up 3) — Enter no longer starts the analysis
+User request: typing a USCF ID and hitting Enter should not start the analysis; only the Analyze
+button should. Added a `keydown` handler on `#analyze-form` that `preventDefault()`s `Enter` when
+`e.target.tagName === 'INPUT'` (ID/search, DOB, count number). Textareas are excluded so Enter still
+inserts newlines in the bulk boxes, and the search dropdown's Enter-to-select is unaffected (its
+`rowsContainer` keydown handler bubbles first and runs `chooseOption` regardless of `preventDefault`).
+`webapp/templates/index.html` only. **Verified (Playwright):** Enter in the ID, DOB, and count fields
+is prevented and triggers 0 submits; Enter in a textarea is not prevented; the Analyze button still
+submits exactly once.
+
+### 2026-06-17 (follow-up 4) — Cache freshness / TTL (auto re-scrape after 7 days)
+User concern about the shared `scrape_cache`: it de-dupes scrapes across users so we don't hammer
+USCF/FIDE (good), but serving a cache hit forever means a player who has since played a new
+tournament shows **stale ratings**. Requested: if the cached result is over a week old, re-scrape.
+
+**Change (reuse-decision only — no schema, timeline, or record-dict change):**
+- `config.py`: added `CACHE_TTL_DAYS = 7` (the freshness window; `0`/`None` disables expiry).
+- `webapp/cache.py`: added pure helper `is_timeline_stale(timeline, max_age_days)` — parses the
+  timeline's `scraped_at` (ISO-8601 UTC, from `datetime.now(timezone.utc).isoformat()`), returns
+  `True` when older than the window. `max_age_days` of `None`/`<=0` → never stale; missing or
+  unparseable `scraped_at` → treated as stale (re-scrape rather than serve unknown-age data); naive
+  timestamps assumed UTC.
+- `webapp/routes.py`: `scrape_stream`'s worker (the only auto-reuse path) now reuses the cache only
+  on a **fresh** hit (`timeline is not None and not is_timeline_stale(...)`). A stale hit falls
+  through to `_fetch_timeline` + `save_timeline` and emits a status line: *"Cached data is over 7
+  days old — re-scraping for the latest ratings."* Imports `CACHE_TTL_DAYS` + `is_timeline_stale`.
+
+**Deliberately unchanged:** `POST /player/<source>/<player_id>/refresh` still force-re-scrapes at any
+age. Read/compute paths (`_record_for`, `player`, `/analyze`, `/export.csv`, `save_to_library`) keep
+using plain `get_timeline` and never trigger network — only the analyze/scrape flow can re-fetch.
+
+**Context:** prompted by a deployment-architecture discussion (Vercel serverless can't persist the
+on-disk SQLite cache; a VPS or persistent-disk PaaS like Railway/Render/Fly fits the 007 design
+as-written). The TTL check is host-independent — it only reads `scraped_at` off the row.
+
+**Verification:** `is_timeline_stale` unit-tested via the `uscf-scraper` env across 9 cases (fresh
+1d, edge 6d, stale 8d/30d, missing ts, bad ts, ttl=0, ttl=None, naive ts) — all pass. `create_app()`
+imports cleanly and `main.scrape_stream` is wired. Files: `config.py`, `webapp/cache.py`,
+`webapp/routes.py`.
+
+### 2026-06-17 (follow-up 5) — removed the All/USCF/FIDE source filter
+User request: drop the All/USCF/FIDE filter buttons from the library + analyze pages (USCF-only for
+now). Removed the `.filter-btns` group from the index "My library" header (`index.html`) and the
+`/analyze` picker sidebar (`analyze.html`), plus the `empty-filter`/`picker-empty` "no matches" lines.
+JS: index `renderList()` no longer filters (dropped `activeFilter`/`emptyMsg` — it just sorts and
+re-appends); analyze dropped its entire source-filter handler block (`pickerItems`/`pickerEmpty`).
+CSS: deleted the now-dead `.filter-btns` / `.filter-btn{,.active,:hover}` / `.empty-filter` rules.
+Per-source `badge-uscf/-fide` badges stay (they just label existing rows). **Verified:** grep finds no
+remaining `filter-btn`/`data-filter`/`activeFilter`/`empty-filter`/`picker-empty` refs; `/` and
+`/analyze` both render 200; the page loads with no console errors (besides the pre-existing favicon
+404). To restore when FIDE returns, re-add the button group + click handlers.
+
+### 2026-06-17 (follow-up 5) — Remove the manual "Refresh from USCF" button
+User asked to remove the manual refresh button entirely. With the 7-day cache TTL (follow-up 4) now
+auto-refreshing stale scrapes during analyze, the manual force-refresh was redundant.
+
+**Removed:**
+- `webapp/templates/player.html`: the refresh `<form>`/button ("Refresh from {{ source|upper }}").
+  Save/remove controls and the "View charts" link are untouched.
+- `webapp/routes.py`: the `refresh_player` view + its `POST /player/<source>/<player_id>/refresh`
+  route. Grep confirmed nothing else (py/html/js/tests) referenced `refresh_player` or `main.refresh`.
+  No dangling imports — the helpers it used (`_fetch_timeline`, `save_timeline`, `get_timeline`, the
+  `PlayerNotFound`/FIDE exception classes) are still used by the `scrape_stream` worker.
+
+**Comment/doc cleanup (the TTL is now the *only* re-scrape path for a cached player):**
+- `config.py`: reworded the `CACHE_TTL_DAYS` comment (dropped the "manual /refresh button" mention).
+- `webapp/routes.py`: reworded the cache-reuse comment in the worker.
+- `CLAUDE.md`: overview line ("manual refresh button" → auto-refresh via `CACHE_TTL_DAYS`), repo-layout
+  route list (dropped `/player/<id>/refresh`), and the two Cache-rules bullets.
+- `specs/*/plan.md` left as-is on purpose — they're historical design records, not current-state docs.
+
+**Consequence (called out for future work):** there is no longer any UI way to force an immediate
+re-scrape of a cached player. A cached player is re-fetched only when it ages past `CACHE_TTL_DAYS`
+and someone re-analyzes it. Re-adding on-demand refresh later is a small revert (route + button).
+
+**Verification (`uscf-scraper` env):** `create_app()` imports cleanly; `main.refresh_player` is no
+longer in the URL map while `main.player` and `main.apply_milestones` remain; `grep` for
+`refresh_player`/`Refresh from` across `webapp/` + `config.py` returns nothing.
+Files: `webapp/templates/player.html`, `webapp/routes.py`, `config.py`, `CLAUDE.md`.
+
+### 2026-06-17 (follow-up 6) — empty player rows must be filled or removed before analyzing
+User: the default form shows 2 rows, but you could fill just one ID and hit Analyze — the blank row
+was silently skipped, which felt wrong. Now an unpopulated row **blocks** Analyze with a small note
+telling the user to remove it (or fill it). `webapp/templates/index.html` only.
+
+- The analyze-form submit validator no longer does `if (!raw) return` (skip blank rows). Instead it
+  flags **every** row that lacks a USCF ID, sets `ok = false`, and shows a red field-hint on that row:
+  - `filledCount === 0` (nothing entered anywhere) → `Enter a USCF ID to analyze.`
+  - otherwise (some rows filled, this one blank) → `Empty row — enter a USCF ID, or click Remove if
+    not adding another player.`
+- Refactored around a `noteError(slot)` helper (tracks the min errored slot) + a pre-computed
+  `filledCount`; removed the old `anyFilled` fallback block (now redundant). The validator still also
+  checks unresolved typed names and malformed/future birthdays, and jumps to the first errored row's
+  page (works with pagination). Typing an ID clears the note (existing `input` handler); clicking
+  Remove drops the row (and its note). Bulk-fill only ever creates filled rows, so it's unaffected.
+- **Verified (Playwright, corrected harness — listener registered *after* the validator so
+  `defaultPrevented` is meaningful):** both rows empty → blocked, each shows `Enter a USCF ID to
+  analyze.`; row 0 filled + row 1 empty → blocked, row 0 clean and row 1 shows the remove note;
+  removing the empty row (1 filled row left) → **not** blocked, submits.
+
+### 2026-06-17 (follow-up 7) — spec 005 extended with OlimpBase pre-2003 findings
+Research into getting FIDE rating data before 2003. Confirmed FIDE's `a_chart_data.phtml` truncates at
+`2003-Apr` for **every** player (Kasparov, rated since 1979, peak 2851 — his chart starts `2003-Apr` @
+2830, all pre-2003 history absent). Found **OlimpBase** (`olimpbase.org`) as the fill: reconstructed
+FIDE rating lists 1971–2001, per-player cards giving rating + per-period games (no `score_pct`, no
+per-game/tournament data — neither existed pre-2003). Folded into `specs/005-fide-source/research.md`
+(new "Pre-2003 history via OlimpBase" section, 2003-floor evidence, split coverage table, probes) and
+`plan.md` (new "Phase 6 — Pre-2003 backfill via OlimpBase", Non-goals, player-page caveat pointer).
+Docs only — no code; `scraper/olimpbase.py` + the timeline merge are deferred to when Phase 6 is scheduled.
+
+### 2026-06-17 (follow-up 6) — Production-readiness pass (publish blockers #1/#2/#3 + cookie flags)
+First batch of the "what blocks publishing?" assessment. Makes the app deployable + safe to expose;
+**nothing is deployed yet**, and no scraper/record/cache-logic changed.
+
+**#1 — Real WSGI server, debug off:**
+- `run.py`: `debug` now defaults OFF (the Werkzeug debugger is RCE if exposed); opt in via
+  `FLASK_DEBUG=1`. `HOST`/`PORT` are env-overridable. The `__main__` block is dev-only.
+- New `Procfile`: `web: gunicorn -c gunicorn.conf.py run:app`.
+- New `gunicorn.conf.py`: `worker_class="gthread"` + `threads=4` (the SSE scrape-progress stream
+  would tie up a sync worker), `workers=2` (network-bound + single-writer SQLite), `timeout=120`
+  (long scrapes / HTML-Cloudflare fallback), stdout access/error logs, `0.0.0.0:$PORT` bind. All
+  values env-overridable (`WEB_CONCURRENCY`, `THREADS`, `TIMEOUT`, `LOG_LEVEL`, `PORT`).
+
+**#2 — Fail-closed SECRET_KEY:** `webapp/__init__.py` adds `_is_production()` (`APP_ENV=production`).
+`create_app()` now raises `RuntimeError` at boot if production and `FLASK_SECRET_KEY` is unset, instead
+of silently using the forgeable `"dev-only-not-secure"`. Dev keeps the default fallback.
+
+**#3 — Portable deps:** new `requirements.txt` (flask, requests, beautifulsoup4, lxml, python-dateutil,
+curl_cffi, gunicorn). `environment.yml` stays for local conda but is a macOS-ARM export that can't
+recreate on a Linux host — `pip install -r requirements.txt` is the deploy path.
+
+**Cookie hardening:** `SESSION_COOKIE_HTTPONLY=True` (explicit), `SESSION_COOKIE_SAMESITE="Lax"`,
+`SESSION_COOKIE_SECURE=_is_production()` (HTTPS-only cookie in prod; off in dev so http://localhost
+keeps the session). Added `ProxyFix(x_for=1,x_proto=1,x_host=1)` in production so the single upstream
+proxy's `X-Forwarded-*` yields correct scheme/client-IP (the IP also feeds a future scrape throttle).
+
+**Docs:** CLAUDE.md gained a "Run in production" section (pip + gunicorn + the `APP_ENV`/secret env
+vars + persistent-disk/no-Vercel reminder) and a dev-only note on `run.py`.
+
+**Verification (`uscf-scraper` env):** `py_compile` clean on run.py/gunicorn.conf.py/webapp.__init__.
+Behavior matrix: dev (no APP_ENV) → dev secret, `SESSION_COOKIE_SECURE` False, no ProxyFix;
+`APP_ENV=production` without secret → boots with `RuntimeError`; with secret → `SECURE=True`, ProxyFix
+applied, real secret used. gunicorn is deploy-only (not in the local env) so `--check-config` skipped;
+config is import-clean. Files: `run.py`, `webapp/__init__.py`, `requirements.txt`, `Procfile`,
+`gunicorn.conf.py`, `CLAUDE.md`.
+
+**Still open from the publish list:** #4 host choice, #5 scraping-from-datacenter-IP / Cloudflare (must
+test on the real host), #6 rate-limit `/scrape` (IP-ban risk — recommended next), #8 DOB-of-minors
+privacy + uschess.org ToS, plus polish (no tests, custom error pages, stale cache-reset flash text).

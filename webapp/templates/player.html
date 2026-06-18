@@ -57,9 +57,6 @@
       <button type="submit" class="primary">☆ Save to library ({{ saved_count }}/{{ anon_limit }})</button>
     </form>
   {% endif %}
-  <form method="POST" action="{{ url_for('main.refresh_player', source=player.source, player_id=player.player_id) }}" class="inline">
-    <button type="submit" class="link-button">Refresh from {{ player.source|upper }}</button>
-  </form>
   <a href="{{ url_for('main.compare', ids=[player.source ~ ':' ~ player.player_id]) }}">View charts</a>
   <a href="{{ url_for('main.index') }}" class="muted">← back</a>
 </section>

@@ -1,0 +1,13 @@
+# Portable, Linux-installable runtime deps for deployment.
+# (environment.yml is a fully-pinned macOS-ARM conda export and will NOT
+# recreate on a server — use this file with `pip install -r requirements.txt`.)
+# Versions mirror the conda env; ranges keep patch updates available.
+flask>=3.1,<4
+requests>=2.32
+beautifulsoup4>=4.14
+lxml>=6.0
+python-dateutil>=2.9
+curl_cffi>=0.9,<0.10
+
+# Production WSGI server (not needed for local `python run.py`).
+gunicorn>=23

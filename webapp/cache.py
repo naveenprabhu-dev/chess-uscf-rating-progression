@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import current_app, g
@@ -121,3 +122,25 @@ def delete_timeline(source, player_id):
         (str(source), str(player_id)),
     )
     db.commit()
+
+
+def is_timeline_stale(timeline, max_age_days):
+    """True if a cached timeline is older than max_age_days and should be
+    re-scraped (USCF/FIDE publish new tournaments, so old rows go stale).
+
+    max_age_days of None or <= 0 disables expiry (never stale). A missing or
+    unparseable `scraped_at` is treated as stale, so we re-scrape rather than
+    serve data of unknown age."""
+    if not max_age_days or max_age_days <= 0:
+        return False
+    ts = (timeline or {}).get("scraped_at")
+    if not ts:
+        return True
+    try:
+        scraped = datetime.fromisoformat(ts)
+    except (ValueError, TypeError):
+        return True
+    if scraped.tzinfo is None:
+        scraped = scraped.replace(tzinfo=timezone.utc)
+    age = datetime.now(timezone.utc) - scraped
+    return age.total_seconds() > max_age_days * 86400

@@ -18,11 +18,6 @@
   <aside class="card analyze-picker">
     <div class="picker-header">
       <h2>Players</h2>
-      <div class="filter-btns" role="group" aria-label="Filter by source">
-        <button type="button" class="filter-btn active" data-filter="all">All</button>
-        <button type="button" class="filter-btn" data-filter="uscf">USCF</button>
-        <button type="button" class="filter-btn" data-filter="fide">FIDE</button>
-      </div>
     </div>
     <div class="picker-controls">
       <button type="button" class="link-button" id="select-all-btn">Select all</button>
@@ -59,7 +54,6 @@
         </li>
       {% endfor %}
     </ul>
-    <p class="muted small empty-filter" id="picker-empty" hidden>No players match this filter.</p>
   </aside>
 
   <section class="card analyze-charts">
@@ -225,24 +219,6 @@
   document.getElementById('select-none-btn').addEventListener('click', () => {
     document.querySelectorAll('.analyze-pick').forEach(cb => { cb.checked = false; });
     refreshCharts();
-  });
-
-  // ── Source filter ───────────────────────────────────────────────────────────
-  const pickerItems = Array.from(document.querySelectorAll('.picker-item'));
-  const pickerEmpty = document.getElementById('picker-empty');
-  document.querySelectorAll('.filter-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const f = btn.dataset.filter;
-      let shown = 0;
-      pickerItems.forEach(li => {
-        const ok = f === 'all' || li.dataset.source === f;
-        li.hidden = !ok;
-        if (ok) shown++;
-      });
-      pickerEmpty.hidden = shown > 0;
-    });
   });
 
   // ── Downloads ─────────────────────────────────────────────────────────────────

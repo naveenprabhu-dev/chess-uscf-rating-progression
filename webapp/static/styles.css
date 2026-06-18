@@ -400,27 +400,6 @@ table.search-results td.actions a {
   flex-wrap: wrap;
 }
 
-.filter-btns {
-  display: flex;
-  gap: 0.25rem;
-}
-.filter-btn {
-  padding: 0.22rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--surface);
-  font-size: 0.78rem;
-  font-weight: 500;
-  color: var(--muted);
-  cursor: pointer;
-}
-.filter-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.filter-btn:hover:not(.active) { background: var(--bg); color: var(--text); }
-
 .sort-control {
   display: flex;
   align-items: center;
@@ -493,8 +472,6 @@ table.search-results td.actions a {
 .milestone-form-actions .save-status { font-weight: 600; }
 .milestone-form-actions .save-status.save-error { color: var(--error); font-weight: 400; }
 .milestone-form p { margin: 0.4rem 0 0; }
-
-.empty-filter { padding: 0.75rem 0; }
 
 .scrape-progress {
   list-style: none;
@@ -571,6 +548,74 @@ table.search-results td.actions a {
   gap: 0.35rem;
   cursor: pointer;
 }
+.source-option-disabled,
+.source-option-disabled input[type="radio"] {
+  cursor: not-allowed;
+}
+.source-option-disabled { color: var(--muted); }
+.coming-soon-tag {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.45rem;
+}
+
+/* ── Bulk add (paste two lists: all IDs, all birthdays) ────────────────────── */
+.bulk-panel {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  margin-bottom: 1rem;
+  background: var(--bg);
+}
+.bulk-cols {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.bulk-col {
+  flex: 1 1 220px;
+  margin: 0;
+}
+.bulk-panel textarea {
+  width: 100%;
+  margin: 0.4rem 0 0.25rem;
+  resize: vertical;
+  min-height: 6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.bulk-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.bulk-status { min-height: 0; margin: 0.25rem 0 0; flex-basis: 100%; }
+.field-hint.hint-warning { color: #9a6a00; }
+
+/* Invalid / future birthday: flag the field red. */
+input[type="text"].input-error,
+input[type="text"].input-error:focus {
+  border-color: var(--error);
+  background: #fdecea;
+}
+
+/* ── Row pager (show players PAGE_SIZE at a time) ──────────────────────────── */
+.player-row.row-hidden { display: none; }
+.row-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.row-pager #pager-label { min-width: 9rem; text-align: center; }
+.row-pager button[disabled] { opacity: 0.45; cursor: not-allowed; }
 
 .note-fide { margin: 0.75rem 0; }
 

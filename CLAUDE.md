@@ -4,7 +4,7 @@ This repo scrapes US Chess (uschess.org) for a player's rating progression and r
 
 ## What you're building
 
-A Flask app where a user enters a list of USCF ID + DOB and sees the rating-milestone insights across multiple players (let's start with max of 2 total players for now). Scraped data is cached in SQLite so we don't hammer USCF, with a manual refresh button. Rating milestones are configurable per session (no accounts). 
+A Flask app where a user enters a list of USCF ID + DOB and sees the rating-milestone insights across multiple players. Scraped data is cached in SQLite so we don't hammer USCF; cached scrapes auto-refresh once they pass a configurable staleness window (`CACHE_TTL_DAYS`). Rating milestones are configurable per session (no accounts). 
 
 **Source of truth for scraping logic:** `scrape_sheets.py` is the latest, correct version of the scraper — treat it as canonical. Port its logic verbatim into `scraper/core.py`, *minus* the Google Sheets I/O (the `gspread`/`oauth2client` imports, `_col_index`/`_cell_a1`/`_read_column_until_blank`/`_validate_config`/`get_uscf_ids`/`get_dobs`, the `sheet.update(...)` call, and the `__main__` block that wires up the sheet client). Also drop the hardcoded `2025-05-16` tournament cutoff — the new app must process all tournaments, including current ones. Keep the `games_played != 0` divide-by-zero guards. The older `archive/scrape_user_input.py` is reference only and is missing those guards — don't copy from it.
 
@@ -18,7 +18,7 @@ scraper/            # sheets-free scraping core — pure functions, no Flask imp
   core.py           # the scraping/parsing logic (ported from old scrape_sheets.py)
 webapp/             # Flask app
   __init__.py       # create_app() factory
-  routes.py         # /, /scrape, /player/<id>, /player/<id>/refresh, /settings, /compare (later)
+  routes.py         # /, /scrape, /player/<id>, /settings, /compare (later)
   cache.py          # SQLite open/init + get/save/invalidate helpers
   forms.py          # input validation (USCF ID, DOB parsing)
   templates/        # base.html, index.html, player.html, _milestone_table.html
@@ -105,9 +105,18 @@ plan before touching `webapp/cache.py` or the library routes.
   `config.ANON_SAVE_LIMIT`, 5) + `session["recent"]` (last analyzed batch). Each entry carries that
   user's `{dob, milestones}`. `index` / `/analyze` / `/export.csv` read library ∪ recent — never a
   global "previously analyzed" view.
-- Cache keyed on `(source, player_id)` — composite PK. `POST /player/<source>/<player_id>/refresh`
-  re-scrapes (re-`fetch`es) a cached player; `GET` never scrapes. `POST /library/remove` removes a
-  `saved` entry only — it never deletes the shared `scrape_cache` row.
+- Cache keyed on `(source, player_id)` — composite PK. `GET` never scrapes; an already-cached player
+  is re-scraped only by the TTL path below (the manual "Refresh from USCF" button + its
+  `/player/<source>/<player_id>/refresh` route were removed 2026-06-17 — freshness is fully
+  automatic now). `POST /library/remove` removes a `saved` entry only — it never deletes the shared
+  `scrape_cache` row.
+- **Cache freshness / TTL.** Cached timelines expire after `config.CACHE_TTL_DAYS` (default 7; set
+  `0`/`None` to keep forever). The analyze flow (`scrape_stream` worker) reuses a cache hit only when
+  `cache.is_timeline_stale(timeline, CACHE_TTL_DAYS)` is False; a stale hit re-scrapes and re-saves
+  so new tournaments show up. Staleness is read from the timeline's `scraped_at` (a missing/unparseable
+  value counts as stale). **This is the only path that re-scrapes an already-cached player** (the
+  manual refresh button is gone); the read/compute paths (`compute_record` callers) use plain
+  `get_timeline` and never trigger network.
 - `POST /player/<source>/<player_id>/apply-milestones` re-derives the view with the current ladder
   with **no re-scrape** (recompute from the cached timeline).
 - `init_db` detects the **legacy `players` table** (computed records, not losslessly convertible to a
@@ -124,6 +133,28 @@ python run.py                         # serves on http://localhost:5050
 ```
 
 Open http://localhost:5050. (`:5000` is hijacked by macOS AirPlay Receiver.)
+
+`python run.py` is **dev-only**: `debug` defaults OFF (set `FLASK_DEBUG=1` to enable the reloader/debugger locally), and `HOST`/`PORT` are env-overridable.
+
+## Run in production
+
+Don't use `python run.py` / the Flask dev server in production. Deploy with the pip
+`requirements.txt` (the conda `environment.yml` is a macOS-ARM export that won't recreate on Linux)
+and the bundled gunicorn config:
+
+```bash
+pip install -r requirements.txt
+export APP_ENV=production               # turns on the prod safeguards below
+export FLASK_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+gunicorn -c gunicorn.conf.py run:app    # or: honor the Procfile (web: …)
+```
+
+`APP_ENV=production` makes `create_app()` **fail to boot without `FLASK_SECRET_KEY`** (the key signs
+the session cookie), sets `SESSION_COOKIE_SECURE` (HTTPS-only cookie), and wraps the app in
+`ProxyFix` (trusts one upstream proxy's `X-Forwarded-*`). `gunicorn.conf.py` uses **threaded**
+(`gthread`) workers because scrape progress streams over SSE — the default sync worker would block a
+whole process per open stream. Needs a **persistent disk** for `instance/cache.sqlite3` (so a VPS or
+persistent-disk PaaS like Railway/Render/Fly — not serverless/Vercel).
 
 ## What NOT to do
 
