@@ -34,5 +34,8 @@
     </tbody>
   </table>
   <p class="muted small">A dash means the player hasn't reached that milestone yet.
-    {% if not show_age %}Age is hidden because no DOB or FIDE birth year is on file.{% endif %}</p>
+    {% if not show_age %}Age is hidden because no birthday was entered (and the FIDE
+    birth-year fallback is off or unavailable for this player).{% endif %}
+    {% if show_age and player.dob_source == 'fide' %}Ages are approximate — derived from
+    the FIDE birth year (counted from Jan 1).{% endif %}</p>
 </section>

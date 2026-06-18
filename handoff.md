@@ -32,6 +32,30 @@ predate the cache/library rework — treat `progress.md` + `CLAUDE.md` as canoni
 
 ---
 
+## Session 2026-06-18 — Railway persistence: `railway.json`, `CACHE_TTL_DAYS` env override
+
+Context: app is deployed on Railway at **elojourney.com**. The cache is a SQLite file at
+`instance/cache.sqlite3` on the container disk, which is **ephemeral on Railway** unless a Volume is
+attached — so the 7-day TTL never actually elapsed before a redeploy/restart wiped the cache. The
+TTL *code* was always correct; only durability was missing.
+
+- **Volume attached (by the user) at `/app/instance`** in the Railway dashboard, so the SQLite cache
+  now survives redeploys/restarts. (Railway volumes are dashboard/CLI-only — no config-as-code field,
+  so this can't live in `railway.json`; it's documented in CLAUDE.md "Railway deploy".)
+- **`railway.json` added (committed)** — pins `NIXPACKS` builder, `gunicorn -c gunicorn.conf.py
+  run:app` start command, and an `ON_FAILURE` restart policy (max 10 retries). Mirrors the Procfile,
+  but makes the deploy explicit/config-as-code.
+- **`CACHE_TTL_DAYS` is now env-overridable** (`config.py` `_env_int` helper) — set it as a Railway
+  service variable to tune the freshness window without a code change; `0` disables expiry. Blank/
+  unparseable falls back to the default 7. Read once at import, so a change needs a redeploy/restart.
+- Docs updated: CLAUDE.md "Run in production" gained a **Railway deploy** subsection (volume mount
+  path + env vars) and the cache-TTL bullet now flags the persistent-disk requirement.
+- No app-logic change — `routes.py` still imports `CACHE_TTL_DAYS` from `config` and the
+  `is_timeline_stale` path is untouched.
+
+This commit also sweeps in prior uncommitted working-tree changes (FIDE source wiring in
+`scraper/*` + `webapp/*`, template/CSS tweaks) at the user's request — see `progress.md` for those.
+
 ## Session 2026-06-17 — hide the source ("USCF") label next to player names
 
 User asked to drop the source tag shown beside player names. Since the app is USCF-only in the UI for

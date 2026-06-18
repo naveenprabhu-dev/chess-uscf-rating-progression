@@ -87,10 +87,13 @@ def _record_for(source, player_id, entry=None):
     if entry is not None:
         dob = entry.get("dob")
         milestones = entry.get("milestones")
+        use_fide_birth = entry.get("use_fide_birth", True)
     else:
         dob = None
         milestones = _active_milestones(source)
-    return compute_record(timeline, dob=dob, milestones=milestones)
+        use_fide_birth = True
+    return compute_record(timeline, dob=dob, milestones=milestones,
+                          use_fide_birth_year=use_fide_birth)
 
 
 def _summaries(entries):
@@ -187,15 +190,20 @@ def scrape():
     if not entries:
         return redirect(url_for("main.index"))
     milestones = _active_milestones(source)
+    # pending_scrape only drives the network fetch (raw timeline), which is
+    # DOB/birth-year-independent — so it stays [pid, dob] and the worker is
+    # untouched. The per-player use_fide_birth flag is a *view* param and lives
+    # on the recent/saved entry that compute_record reads.
     session["pending_scrape"] = {
         "source": source,
-        "players": [[pid, dob] for pid, dob in entries],
+        "players": [[pid, dob] for pid, dob, _ufb in entries],
     }
     # Remember this batch's view params so /analyze and /player can show the
     # just-analyzed players (and offer to save them) before they're in the library.
     session["recent"] = [
-        {"source": source, "player_id": pid, "dob": dob, "milestones": milestones}
-        for pid, dob in entries
+        {"source": source, "player_id": pid, "dob": dob,
+         "use_fide_birth": ufb, "milestones": milestones}
+        for pid, dob, ufb in entries
     ]
     return redirect(url_for("main.scrape_progress"))
 
@@ -382,14 +390,17 @@ def save_to_library():
     if entry is not None:
         dob = entry.get("dob")
         milestones = entry.get("milestones")
+        use_fide_birth = entry.get("use_fide_birth", True)
     else:
         dob = None
         milestones = _active_milestones(source)
+        use_fide_birth = True
     saved.append({
         "source": source,
         "player_id": str(player_id),
         "name": timeline.get("name"),
         "dob": dob,
+        "use_fide_birth": use_fide_birth,
         "milestones": milestones,
     })
     session["saved"] = saved

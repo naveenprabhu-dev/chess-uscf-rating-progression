@@ -304,14 +304,16 @@ def fetch_fide_history(session, fide_id, progress_cb=None, status_cb=None):
     }
 
 
-def scrape_fide_player(session, fide_id, dob=None, milestones=None, progress_cb=None, status_cb=None):
+def scrape_fide_player(session, fide_id, dob=None, milestones=None, progress_cb=None,
+                       status_cb=None, use_fide_birth_year=True):
     """Back-compat wrapper: fetch the raw FIDE timeline and compute the public
     record for this DOB + milestone ladder. Returns the canonical dict shape."""
     from scraper.core import compute_record
     timeline = fetch_fide_history(
         session, fide_id, progress_cb=progress_cb, status_cb=status_cb,
     )
-    return compute_record(timeline, dob=dob, milestones=milestones)
+    return compute_record(timeline, dob=dob, milestones=milestones,
+                          use_fide_birth_year=use_fide_birth_year)
 
 
 def get_fide_birth_year_from_profile(session, fide_id):

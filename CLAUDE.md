@@ -1,10 +1,10 @@
 # CCCWebScraper — Agent Handoff
 
-This repo scrapes US Chess (uschess.org) for a player's rating progression and reports how many months, games, and what age it took them to reach a configurable set of rating milestones, plus their cumulative score percentage at each one. The current build is turning this from a CLI/Google-Sheets script into a small Flask website. ALWAYS UPDATE HANDOFF.MD AFTER EVERY CODING CHANGE
+This repo uses US Chess API for a player's rating progression and reports how many months, games, and what age it took them to reach a configurable set of rating milestones, plus their cumulative score percentage at each one. If the API fails to work, it falls back onto the web scraping logic (only gets tournaments up to around Oct 2025) ALWAYS UPDATE HANDOFF.MD AFTER EVERY CODING CHANGE
 
 ## What you're building
 
-A Flask app where a user enters a list of USCF ID + DOB and sees the rating-milestone insights across multiple players. Scraped data is cached in SQLite so we don't hammer USCF; cached scrapes auto-refresh once they pass a configurable staleness window (`CACHE_TTL_DAYS`). Rating milestones are configurable per session (no accounts). 
+A Flask app where a user enters a list of USCF ID + DOB and sees the rating-milestone insights across multiple players. Datais cached in SQLite so we don't hammer USCF; cached scrapes auto-refresh once they pass a configurable staleness window (`CACHE_TTL_DAYS`). Rating milestones are configurable per session (no accounts). 
 
 **Source of truth for scraping logic:** `scrape_sheets.py` is the latest, correct version of the scraper — treat it as canonical. Port its logic verbatim into `scraper/core.py`, *minus* the Google Sheets I/O (the `gspread`/`oauth2client` imports, `_col_index`/`_cell_a1`/`_read_column_until_blank`/`_validate_config`/`get_uscf_ids`/`get_dobs`, the `sheet.update(...)` call, and the `__main__` block that wires up the sheet client). Also drop the hardcoded `2025-05-16` tournament cutoff — the new app must process all tournaments, including current ones. Keep the `games_played != 0` divide-by-zero guards. The older `archive/scrape_user_input.py` is reference only and is missing those guards — don't copy from it.
 
@@ -63,16 +63,6 @@ archive/            # old CLI scripts kept for reference (not imported anywhere)
 
 For URL patterns, parsing rules, divide-by-zero guards, and the Cloudflare/bot-detection escalation ladder, see [`docs/scraping.md`](docs/scraping.md). Read it before editing anything in `scraper/core.py`.
 
-## FIDE as a second source (spec 005 — implemented)
-
-FIDE (ratings.fide.com) is a full first-class source alongside USCF. See [`specs/005-fide-source/plan.md`](specs/005-fide-source/plan.md) and [`specs/005-fide-source/research.md`](specs/005-fide-source/research.md); FIDE scraper internals are in `docs/scraping.md`.
-
-- **`scraper/fide.py`** holds `scrape_fide_player`, `search_fide_players`, `get_fide_history`, `get_fide_calculations`, and `FidePlayerNotFound` / `FideNoRatedHistory` / `FideScrapeError`. Rating history is one JSON call (`a_chart_data.phtml`); `score_pct` adds one `a_indv_calculation.php` call per rated period the player competed in (early-exits once the top milestone is reached). Plain `requests`, no Cloudflare/curl_cffi. Keep `scraper.core.get_fide_birth_year` framework-agnostic.
-- FIDE `score_pct` is computed from per-period W/D/L. It can still be `None` for an individual milestone the player hasn't reached, or for all milestones beyond a period whose calc page couldn't be fetched (score degrades gracefully rather than crashing) — so milestone-table and chart logic must still handle `None` per cell.
-- **No FIDE rate-limit throttle observed.** An earlier `research.md` claim of a "~30 s empty-body rate limit" was unverified and is wrong (burst-tested 2026-05-28). The scraper stays sequential/polite and keeps a single retry-on-empty as cheap insurance, but does not assume a 30 s window.
-- **Site-wide source toggle (deviation from the plan).** The plan specified a *per-row* source toggle; the implemented build uses ONE active source per session (`session["source"]`, "uscf" default or "fide"). Both player rows use the session source — no mixing within a single scrape. Validation, scraper dispatch, and the active milestone list all key off `session["source"]`. Per-row `source_N` fields were dropped.
-- **Per-source milestone ladders:** `DEFAULT_USCF_MILESTONES` (400–2200) and `DEFAULT_FIDE_MILESTONES` (1400–2700) in `config.py`. Stored as `session["milestones_uscf"]` / `session["milestones_fide"]`; the active list is chosen by source at scrape time. `DEFAULT_RATING_MILESTONES` remains a back-compat alias for the USCF ladder.
-- **`/compare` stays genuinely source-aware** even though scrapes are single-source: cached players from different sources can be compared. `ids` are namespaced `source:player_id`. A mixed-source caveat banner shows when both sources appear. (The Score chart no longer blurs for all-FIDE comparisons — FIDE now has real score data.)
 
 ## Date handling
 
@@ -110,8 +100,11 @@ plan before touching `webapp/cache.py` or the library routes.
   `/player/<source>/<player_id>/refresh` route were removed 2026-06-17 — freshness is fully
   automatic now). `POST /library/remove` removes a `saved` entry only — it never deletes the shared
   `scrape_cache` row.
-- **Cache freshness / TTL.** Cached timelines expire after `config.CACHE_TTL_DAYS` (default 7; set
-  `0`/`None` to keep forever). The analyze flow (`scrape_stream` worker) reuses a cache hit only when
+- **Cache freshness / TTL.** Cached timelines expire after `config.CACHE_TTL_DAYS` (default 7,
+  overridable via the `CACHE_TTL_DAYS` env var; set `0`/`None` to keep forever). The TTL only does its
+  job on a host with a **persistent disk** — on Railway that means a Volume mounted at `/app/instance`
+  (see "Railway deploy"), else the cache resets on each redeploy/restart before it can age out. The
+  analyze flow (`scrape_stream` worker) reuses a cache hit only when
   `cache.is_timeline_stale(timeline, CACHE_TTL_DAYS)` is False; a stale hit re-scrapes and re-saves
   so new tournaments show up. Staleness is read from the timeline's `scraped_at` (a missing/unparseable
   value counts as stale). **This is the only path that re-scrapes an already-cached player** (the
@@ -155,6 +148,19 @@ the session cookie), sets `SESSION_COOKIE_SECURE` (HTTPS-only cookie), and wraps
 (`gthread`) workers because scrape progress streams over SSE — the default sync worker would block a
 whole process per open stream. Needs a **persistent disk** for `instance/cache.sqlite3` (so a VPS or
 persistent-disk PaaS like Railway/Render/Fly — not serverless/Vercel).
+
+### Railway deploy (current host: elojourney.com)
+
+`railway.json` (committed) pins the NIXPACKS builder, the gunicorn start command, and an
+on-failure restart policy. **The persistent disk is NOT in `railway.json`** — Railway volumes are
+dashboard/CLI-managed only, with no config-as-code field. You must attach a **Volume mounted at
+`/app/instance`** in the Railway dashboard, or the SQLite cache lives on the container's ephemeral
+filesystem and is wiped on every redeploy/restart (so the TTL below never gets to elapse). A volume
+is attached as of 2026-06-18. Set `APP_ENV=production` and `FLASK_SECRET_KEY` as service variables.
+
+`CACHE_TTL_DAYS` is **env-overridable** (see `config.py`) — set it as a Railway service variable to
+tune the freshness window without a code change; `0` disables expiry. It's read once at process
+start, so a change needs a redeploy/restart to take effect.
 
 ## What NOT to do
 

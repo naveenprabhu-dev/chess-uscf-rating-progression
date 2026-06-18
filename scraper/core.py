@@ -382,16 +382,19 @@ def fetch_history(session, uscf_id, progress_cb=None, status_cb=None):
     return _fetch_history_html(session, uscf_id, progress_cb=progress_cb)
 
 
-def compute_record(timeline, dob=None, milestones=None):
+def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True):
     """Pure function (spec 007 Part 3b): turn a raw cached timeline + this user's
     DOB and milestone ladder into the canonical public record dict (the shape in
     CLAUDE.md). No network. Works for any source.
 
-    DOB precedence: a user-supplied `dob` wins; else the timeline's cached FIDE
-    birth year synthesizes `01/01/<year>` (dob_source="fide"); else age fields are
-    None (dob_source="none"). `score_pct` is `score_numerator / score_games`,
-    guarded against the missing/zero denominator (the relocated divide-by-zero
-    guard) so it degrades to None per-cell when score data is unavailable.
+    DOB precedence: a user-supplied `dob` wins; else, when `use_fide_birth_year`
+    is True, the timeline's cached FIDE birth year synthesizes `01/01/<year>`
+    (dob_source="fide") so ages are approximate (to the calendar year); else age
+    fields are None (dob_source="none"). `use_fide_birth_year=False` opts a player
+    out of that fallback, so a player with no user-supplied DOB gets no age stats
+    at all. `score_pct` is `score_numerator / score_games`, guarded against the
+    missing/zero denominator (the relocated divide-by-zero guard) so it degrades
+    to None per-cell when score data is unavailable.
     """
     source = timeline.get("source", "uscf")
     default = DEFAULT_FIDE_MILESTONES if source == "fide" else DEFAULT_RATING_MILESTONES
@@ -400,7 +403,7 @@ def compute_record(timeline, dob=None, milestones=None):
     fide_birth_year = timeline.get("fide_birth_year")
     if dob:
         dob_source = "user"
-    elif fide_birth_year:
+    elif fide_birth_year and use_fide_birth_year:
         dob = f"01/01/{fide_birth_year}"
         dob_source = "fide"
     else:
@@ -465,14 +468,16 @@ def compute_record(timeline, dob=None, milestones=None):
     }
 
 
-def scrape_player(session, uscf_id, dob=None, milestones=None, progress_cb=None, status_cb=None):
+def scrape_player(session, uscf_id, dob=None, milestones=None, progress_cb=None,
+                  status_cb=None, use_fide_birth_year=True):
     """Back-compat wrapper: fetch the raw timeline (API-first, HTML fallback) and
     compute the public record for this DOB + milestone ladder. The fetch/compute
     split (spec 007) lets the timeline be cached and re-derived per user."""
     timeline = fetch_history(
         session, uscf_id, progress_cb=progress_cb, status_cb=status_cb,
     )
-    return compute_record(timeline, dob=dob, milestones=milestones)
+    return compute_record(timeline, dob=dob, milestones=milestones,
+                          use_fide_birth_year=use_fide_birth_year)
 
 
 if __name__ == "__main__":

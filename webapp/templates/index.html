@@ -25,13 +25,9 @@
     </fieldset>
 
     <div class="count-control">
-      <label for="player-count">How many players?
-        <input type="number" id="player-count" min="1" max="100" value="2">
-      </label>
-      <button type="button" class="link-button" id="set-count-btn">Set</button>
       <button type="button" class="link-button" id="bulk-toggle-btn"
               aria-expanded="false" aria-controls="bulk-panel">Paste a list</button>
-      <span class="muted small">1–100. Set the count and fill each row, or paste a whole list.</span>
+      <span class="muted small">Add players one at a time, or paste a whole list.</span>
     </div>
 
     {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
@@ -83,6 +79,11 @@
           Date of birth <span class="muted small">(optional — for age stats)</span>
           <input type="text" name="dob___IDX__" class="dob-input" placeholder="MM/DD/YYYY">
           <span class="field-hint dob-hint"></span>
+        </label>
+        <label class="fide-birth-opt">
+          <input type="checkbox" name="use_fide_birth___IDX__" class="use-fide-birth" checked>
+          <span class="muted small">No birthday? Use FIDE birth year if one exists
+            (MM/DD Jan 1), provides approximate ages. Uncheck to skip age stats.</span>
         </label>
         <button type="button" class="link-button remove-row-btn">Remove</button>
       </fieldset>
@@ -256,7 +257,6 @@ document.querySelectorAll('input[name="source"]').forEach(r => {
 // ── Dynamic player rows (count-first, shown PAGE_SIZE at a time) ──────────────
 const rowsContainer = document.getElementById('player-rows');
 const rowTemplate = document.getElementById('player-row-template');
-const countInput = document.getElementById('player-count');
 const PAGE_SIZE = 5;
 let currentPage = 0;
 
@@ -285,6 +285,7 @@ function reindexRows() {
     dd.id = `search-dropdown-${i}`;
     row.querySelector('.field-hint').id = `hint_${i}`;
     row.querySelector('input[name^="dob_"]').name = `dob_${i}`;
+    row.querySelector('.use-fide-birth').name = `use_fide_birth_${i}`;
   });
 }
 
@@ -332,18 +333,9 @@ function setRowCount(n) {
     cur++;
   }
   reindexRows();
-  countInput.value = rowCount();
   renderPage();
 }
 
-document.getElementById('set-count-btn').addEventListener('click', () => {
-  currentPage = 0;
-  setRowCount(parseInt(countInput.value, 10));
-});
-countInput.addEventListener('change', () => {
-  currentPage = 0;
-  setRowCount(parseInt(countInput.value, 10));
-});
 document.getElementById('add-row-btn').addEventListener('click', () => {
   setRowCount(rowCount() + 1);
   goToPage(pageOf(rowCount() - 1));     // jump to the page holding the new row
@@ -354,7 +346,6 @@ rowsContainer.addEventListener('click', e => {
   if (rowCount() <= 1) return;          // always keep at least one row
   btn.closest('.player-row').remove();
   reindexRows();
-  countInput.value = rowCount();
   renderPage();
 });
 

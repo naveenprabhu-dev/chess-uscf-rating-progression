@@ -837,3 +837,91 @@ Left alone on purpose: `compare.html` (same badge + legend pattern, but it's a d
 redirects to `/analyze`); the `.badge`/`badge-uscf` CSS (harmless, still used by the dead template).
 **Verified (`uscf-scraper` env):** all four templates (analyze/index/compare/player) compile via the
 Jinja env; `GET /` returns 200 with no `badge-uscf` in the HTML. Files: `analyze.html`, `index.html`.
+
+### 2026-06-18 — Remove the "How many players?" count input + "Set" button
+User wanted the index form less cluttered: players should only be added via the
+"+ Add another player" button or the "Paste a list" bulk panel — no manual count entry.
+- `webapp/templates/index.html`: dropped the `#player-count` number `<input>` and the
+  `#set-count-btn` "Set" button from the `.count-control` block; rewrote the help text
+  ("Add players one at a time, or paste a whole list."). Removed the now-dead JS: the
+  `countInput` const, the `set-count-btn` click + `countInput` change listeners, and the
+  two `countInput.value = rowCount()` syncs in `setRowCount`/the remove-row handler.
+  `setRowCount(n)` is unchanged and still drives the "+ Add another player" button,
+  `fillRows` (bulk paste), and `initRows` (starts at 2 rows / prefill). The 1–100 clamp
+  inside `setRowCount` is retained.
+- `webapp/static/styles.css`: removed the now-unused `.count-control label` and
+  `.count-control input[type="number"]` rules; kept the `.count-control` flex container
+  (still holds the "Paste a list" button + help text).
+**Verified (`uscf-scraper` env):** `index.html` compiles via the Jinja env; no remaining
+references to `countInput`/`player-count`/`set-count` in the template.
+
+### 2026-06-18 (follow-up) — Per-player "use FIDE birth year" opt-out toggle
+Made the previously-silent FIDE-birth-year age fallback an explicit, per-player choice.
+Before, `compute_record` always synthesized `01/01/<fide_birth_year>` when no DOB was
+entered (dob_source="fide"). Now each player row has a checkbox (checked by default):
+- **Checked + no DOB** → use the FIDE birth year if one exists; age counts from Jan 1, so
+  milestone ages are approximate (UI says so).
+- **Unchecked + no DOB** → no age stats at all (dob_source="none").
+- A typed DOB always wins regardless of the checkbox.
+
+Changes:
+- `scraper/core.py`: `compute_record(..., use_fide_birth_year=True)` — gate the FIDE-year
+  branch on the flag. `fide_birth_year` is still returned in the record either way (so the
+  UI can still show it). Threaded the kwarg through the `scrape_player` wrapper.
+- `scraper/uscf_api.py` / `scraper/fide.py`: same `use_fide_birth_year=True` kwarg on the
+  `scrape_player_api` / `scrape_fide_player` wrappers → `compute_record`.
+- `webapp/forms.py`: `parse_player_inputs` now returns 3-tuples
+  `(player_id, dob, use_fide_birth)`. Reads `use_fide_birth_N` (an unchecked HTML checkbox
+  submits nothing → absent == False). Dedup updated to 3-tuples.
+- `webapp/routes.py`: `scrape()` stores `use_fide_birth` on each `recent` entry (kept
+  `pending_scrape.players` as 2-element `[pid, dob]` — the fetch worker is timeline-only and
+  birth-year-independent, so it's untouched). `_record_for` and the ☆-save flow now read
+  `entry["use_fide_birth"]` (default True for legacy entries) and pass it to `compute_record`.
+- `webapp/templates/index.html`: added the `use_fide_birth___IDX__` checkbox (checked) +
+  caption under the DOB field in the row template; `reindexRows()` renames it per row.
+- `webapp/templates/player.html` + `_milestone_table.html`: clarified the FIDE-birth-year
+  note ("Jan 1, so ages are approximate") and the age-hidden reason.
+- `webapp/static/styles.css`: `.fide-birth-opt` flex layout (checkbox inline with caption).
+**Verified (`uscf-scraper` env):** py_compile clean on all 5 modules; `compute_record`
+on/off/user-DOB gating asserted (ON→fide age 11, OFF→none/no age, USER→user age, fide_birth_year
+still surfaced when OFF); `parse_player_inputs` returns correct 3-tuples for checked/unchecked/
+typed-DOB rows; all 4 templates Jinja-parse; `GET /` 200 with the checkbox markup present.
+
+### 2026-06-18 (follow-up 2) — Reword the FIDE-birth-year checkbox caption
+`webapp/templates/index.html`: caption is now "No birthday? Use FIDE birth year if one
+exists (01/01/{birth_year}), provides approximate ages. Uncheck to skip age stats."
+(`{birth_year}` is literal — the row template is JS-cloned before a player is chosen, so
+there's no concrete year to interpolate; Jinja leaves single-brace text untouched.)
+Verified `GET /` still 200 with the new caption present.
+
+Note (answered a user Q, no code change): re-analyzing the same player with a different DOB
+*does* update ages — the cache holds a DOB-independent raw timeline and `compute_record`
+recomputes age per request from the entry's DOB; `scrape()` overwrites `session["recent"]`.
+Caveat: `_entry_for` prefers `_saved()` over `_recent()`, so a player already in the ☆ library
+keeps its saved DOB/milestones/use_fide_birth until removed & re-saved — a re-analysis doesn't
+update a saved entry. Potential future fix if desired.
+
+### 2026-06-18 (follow-up 3) — Tweak FIDE-birth-year caption wording
+`webapp/templates/index.html`: "(01/01/{birth_year})" → "(MM/DD Jan 1)". Verified GET / 200.
+
+### 2026-06-18 — Railway cache persistence + `CACHE_TTL_DAYS` env override
+Prompted by a user question: the app is deployed on Railway (elojourney.com), and the SQLite
+cache (`instance/cache.sqlite3`) was on the container's **ephemeral** disk — so it was wiped on
+every redeploy/restart and the 7-day TTL never got to elapse. Investigation confirmed the TTL
+*code* (`is_timeline_stale` + the `scrape_stream` worker re-scrape path) is correct; only
+durability was missing. Live-checked on elojourney.com via Playwright: analyze + player page
+render from the cache with a persisted `Scraped at` timestamp.
+
+Fix (user attached a Railway Volume at `/app/instance`; I did the code/doc side):
+- `config.py`: `CACHE_TTL_DAYS` now reads the `CACHE_TTL_DAYS` env var via a new `_env_int(name,
+  default)` helper (blank/unparseable → default 7; `0` disables expiry). Read once at import, so a
+  change needs a redeploy/restart. No call-site change — `routes.py` still imports it from `config`.
+- `railway.json` (new, committed): pins `NIXPACKS` builder, `gunicorn -c gunicorn.conf.py run:app`
+  start command, `ON_FAILURE` restart policy (max 10). Railway volumes are dashboard/CLI-only (no
+  config-as-code field), so the volume mount is documented, not declared here.
+- `CLAUDE.md`: new "Railway deploy" subsection (volume must mount at `/app/instance`; `APP_ENV`/
+  `FLASK_SECRET_KEY` service vars; `CACHE_TTL_DAYS` env override) + cache-TTL bullet now notes the
+  persistent-disk requirement. `handoff.md`: new 2026-06-18 session entry.
+
+This commit also lands the prior uncommitted working-tree changes (FIDE source wiring across
+`scraper/*` and `webapp/*`, plus template/CSS tweaks) — swept into main at the user's request.

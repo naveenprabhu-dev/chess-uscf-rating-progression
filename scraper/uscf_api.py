@@ -205,10 +205,12 @@ def fetch_history_api(uscf_id, progress_cb=None, status_cb=None):
         raise ApiUnavailable(f"unexpected: {type(e).__name__}: {e}")
 
 
-def scrape_player_api(uscf_id, dob=None, milestones=None, progress_cb=None, status_cb=None):
+def scrape_player_api(uscf_id, dob=None, milestones=None, progress_cb=None,
+                      status_cb=None, use_fide_birth_year=True):
     """Back-compat wrapper: fetch the raw timeline via the API and compute the
     public record. Returns the same dict shape as scraper.core.scrape_player;
     raises ApiUnavailable so the caller can fall back to HTML."""
     from scraper.core import compute_record
     timeline = fetch_history_api(uscf_id, progress_cb=progress_cb, status_cb=status_cb)
-    return compute_record(timeline, dob=dob, milestones=milestones)
+    return compute_record(timeline, dob=dob, milestones=milestones,
+                          use_fide_birth_year=use_fide_birth_year)
