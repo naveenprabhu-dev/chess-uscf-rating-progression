@@ -23,12 +23,29 @@ their most-recent analyzed batch (`session["recent"]`). Analyzing no longer auto
 separate ☆ button**. Phases 2–4 (Firebase login, 100-cap, anon→uid migration) are **not done** — see
 `specs/007-user-auth/plan.md` and the latest `progress.md` session.
 
-**Most recent session: 2026-06-17 (hide source label in UI, below) — dropped the "USCF" badge/legend
-next to player names.** Before that: production-readiness pass (gunicorn/Procfile, fail-closed
+**Most recent session: 2026-06-18 (cap analyze charts at 5, below) — `/analyze` now draws at most
+`ANALYZE_CHART_LIMIT` (5) player lines at once so a big batch stays legible.** Before that:
+2026-06-17 (hide source label in UI) — dropped the "USCF" badge/legend
+next to player names. Before that: production-readiness pass (gunicorn/Procfile, fail-closed
 SECRET_KEY, cookie hardening, pip `requirements.txt`). Before that: require non-empty player rows +
 remove source filter; remove manual refresh; cache TTL; paste-a-list bulk input + FIDE temporarily
 disabled (all same day); spec 007 Phases 0 & 1 (`progress.md` 2026-05-30). The 2026-05-28 notes below
 predate the cache/library rework — treat `progress.md` + `CLAUDE.md` as canonical where they differ.
+
+---
+
+## Session 2026-06-18 (follow-up) — Cap analyze charts at 5 players
+A big batch (e.g. 100 players) would draw every line on the `/analyze` charts and become unreadable.
+Added a configurable cap (default 5):
+- `webapp/routes.py`: `ANALYZE_CHART_LIMIT = 5`. `analyze()` truncates the initial selection
+  (`requested[:ANALYZE_CHART_LIMIT]`) so a large batch doesn't load all-checked, and passes
+  `chart_limit` to the template. **The picker still lists every player** — the cap only limits how
+  many lines are drawn.
+- `webapp/templates/analyze.html`: `MAX_CHARTED` from `chart_limit`; `enforceLimit()` disables the
+  unchecked checkboxes once the cap is hit and shows a note; "Select all" → "Select first N" and
+  stops at the cap.
+Client-side toggle logic + a server-side initial-selection truncation. No scraper/cache/contract
+changes. Not yet smoke-tested in a browser (user is verifying locally).
 
 ---
 

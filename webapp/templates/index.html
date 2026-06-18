@@ -3,10 +3,11 @@
 
 {% block content %}
 <section class="hero">
-  <h1>Analyze a player's rating climb</h1>
-  <p class="muted">Pick a source, type a name or ID for each player, add a birthdate (optional), then press <strong>Analyze</strong>.
-     DOB is optional — if blank we try to pull the birth year from FIDE, otherwise age stats are skipped.
-     After analyzing, save the players you want to keep to your library (up to {{ anon_limit }} per browser).</p>
+  <h1>Analyze chess players' Elo journey! </h1>
+  <p>For each rating milestone below, we compute <strong>games played</strong>, <strong>months taken</strong>, <strong>age at milestone</strong>, and <strong>cumulative score</strong>. For each player, enter a USCF ID or search by name and add a birthdate (optional), then press analyze.
+     If DOB blank, we'll try to pull the birth year from FIDE, otherwise age stats are skipped.</p>
+
+  <p>After analyzing, save data as a CSV for further analysis or compare the players you've analyzed with our graphs: great tool for understanding how long chess improvement takes!</p>
 </section>
 
 <div class="card">

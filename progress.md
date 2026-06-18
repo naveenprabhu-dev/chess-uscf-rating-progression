@@ -925,3 +925,17 @@ Fix (user attached a Railway Volume at `/app/instance`; I did the code/doc side)
 
 This commit also lands the prior uncommitted working-tree changes (FIDE source wiring across
 `scraper/*` and `webapp/*`, plus template/CSS tweaks) — swept into main at the user's request.
+
+### 2026-06-18 (follow-up 4) — Cap analyze charts at 5 players at a time
+Prompted by a user concern: with a large batch (e.g. 100 players) the `/analyze` charts would draw
+every line at once and become unreadable. Added a configurable cap (default 5):
+- `webapp/routes.py`: new `ANALYZE_CHART_LIMIT = 5`; `analyze()` truncates the initial on-chart
+  selection (`requested[:ANALYZE_CHART_LIMIT]`) so a big batch doesn't load all-checked, and passes
+  `chart_limit` to the template. The picker still lists *every* player — the cap only limits what's
+  drawn.
+- `webapp/templates/analyze.html`: `MAX_CHARTED = {{ chart_limit }}`; new `enforceLimit()` disables
+  the unchecked checkboxes once the cap is reached (and shows a "Showing the max of N players…"
+  note), called from `refreshCharts()`. "Select all" → "Select first N" and stops at the cap. Intro
+  copy notes the limit.
+Client-side only + a server-side initial-selection truncation; no scraper/cache/contract changes.
+Not yet verified in-browser (user will check locally).

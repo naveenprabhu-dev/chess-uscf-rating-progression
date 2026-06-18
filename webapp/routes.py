@@ -25,6 +25,12 @@ bp = Blueprint("main", __name__)
 
 VALID_SOURCES = ("uscf", "fide")
 
+# Max players charted at once. The picker still lists everyone, but only this
+# many lines are drawn so the charts stay legible (100 overlapping lines are
+# unreadable). Enforced server-side on the initial selection and client-side
+# on toggles in analyze.html.
+ANALYZE_CHART_LIMIT = 5
+
 
 def _active_source():
     """The single, site-wide active source for this session."""
@@ -542,6 +548,11 @@ def analyze():
             if k in have and k not in requested:
                 requested.append(k)
 
+    # Cap the initial on-chart selection so a big batch (e.g. 100 players)
+    # doesn't render every line at once. Everyone stays in the picker list;
+    # the cap only limits what's checked/drawn on load.
+    requested = requested[:ANALYZE_CHART_LIMIT]
+
     # Shared milestone axis = union of every shown player's thresholds.
     milestone_set = set()
     for r in records:
@@ -563,6 +574,7 @@ def analyze():
         "analyze.html",
         chart_data=chart_data,
         initial_selected=requested,
+        chart_limit=ANALYZE_CHART_LIMIT,
         saved_keys=saved_keys,
         saved_count=len(_saved()),
         anon_limit=ANON_SAVE_LIMIT,

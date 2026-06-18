@@ -10,7 +10,7 @@
       <a href="{{ url_for('main.index') }}" class="muted">← back</a>
     </div>
   </div>
-  <p class="muted small">Toggle players on or off to add or remove their lines from every chart. Hover a point to see the exact value. Save any chart — or all of them — as a PNG image.</p>
+  <p class="muted small">Toggle players on or off to add or remove their lines from every chart (up to {{ chart_limit }} at a time, so the lines stay readable). Hover to see the exact value. Save any or all charts as a PNG image, and download all info as a CSV file!</p>
   <p class="banner" id="mixed-banner" hidden>Comparing USCF and FIDE ratings — note the scales are not equivalent.</p>
 </section>
 
@@ -20,9 +20,10 @@
       <h2>Players</h2>
     </div>
     <div class="picker-controls">
-      <button type="button" class="link-button" id="select-all-btn">Select all</button>
+      <button type="button" class="link-button" id="select-all-btn">Select first {{ chart_limit }}</button>
       <button type="button" class="link-button" id="select-none-btn">Select none</button>
     </div>
+    <p class="muted small" id="picker-limit-msg" hidden></p>
     <p class="muted small">Library: {{ saved_count }}/{{ anon_limit }} saved. ☆ saves a player to your library; ★ is already saved.</p>
     <ul class="picker-list" id="picker-list">
       {% for p in chart_data.players %}
@@ -84,6 +85,9 @@
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
 <script>
   const chartData = {{ chart_data|tojson }};
+  // Max players drawn at once. Everyone stays in the picker; beyond this many
+  // checked, the remaining checkboxes are disabled until one is unchecked.
+  const MAX_CHARTED = {{ chart_limit }};
   // index players by namespaced key for quick lookup
   const playerByKey = {};
   chartData.players.forEach(p => { playerByKey[p.source + ':' + p.player_id] = p; });
@@ -175,12 +179,27 @@
     return Array.from(document.querySelectorAll('.analyze-pick:checked')).map(cb => cb.dataset.key);
   }
 
+  // Once MAX_CHARTED are checked, disable the rest so no more can be added until
+  // one is freed. Keeps the chart legible and makes the cap self-explanatory.
+  function enforceLimit() {
+    const atLimit = document.querySelectorAll('.analyze-pick:checked').length >= MAX_CHARTED;
+    document.querySelectorAll('.analyze-pick').forEach(cb => {
+      cb.disabled = atLimit && !cb.checked;
+    });
+    const msg = document.getElementById('picker-limit-msg');
+    msg.hidden = !atLimit;
+    if (atLimit) {
+      msg.textContent = `Showing the max of ${MAX_CHARTED} players. Uncheck one to add another.`;
+    }
+  }
+
   function refreshCharts() {
     const keys = selectedKeys();
     Object.values(charts).forEach(({ chart, valueKey }) => {
       chart.data.datasets = keys.map(key => datasetFor(key, valueKey));
       chart.update();
     });
+    enforceLimit();
     document.getElementById('no-selection-msg').hidden = keys.length > 0;
     // Mixed-source banner from the live selection.
     const sources = new Set(keys.map(k => k.split(':')[0]));
@@ -211,8 +230,11 @@
   });
 
   document.getElementById('select-all-btn').addEventListener('click', () => {
-    // Only select visible (filtered) rows.
-    document.querySelectorAll('.picker-item:not([hidden]) .analyze-pick').forEach(cb => { cb.checked = true; });
+    // Select visible (filtered) rows, but never more than the cap.
+    let count = document.querySelectorAll('.analyze-pick:checked').length;
+    document.querySelectorAll('.picker-item:not([hidden]) .analyze-pick').forEach(cb => {
+      if (!cb.checked && count < MAX_CHARTED) { cb.checked = true; count++; }
+    });
     refreshCharts();
   });
   document.getElementById('select-none-btn').addEventListener('click', () => {
