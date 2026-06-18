@@ -186,7 +186,6 @@
           <label class="row-check">
             <input type="checkbox" name="ids" value="{{ p.source }}:{{ p.player_id }}" class="compare-pick">
             <a href="{{ url_for('main.player', source=p.source, player_id=p.player_id) }}">{{ p.name }}</a>
-            <span class="badge badge-{{ p.source }}">{{ p.source|upper }}</span>
           </label>
           <span class="muted small player-meta">
             #{{ p.player_id }}{% if p.federation %} · {{ p.federation }}{% endif %}{% if p.peak_rating %} · reached {{ p.peak_rating }}{% endif %} · {{ p.scraped_at[:10] }}

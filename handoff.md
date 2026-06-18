@@ -23,11 +23,30 @@ their most-recent analyzed batch (`session["recent"]`). Analyzing no longer auto
 separate ☆ button**. Phases 2–4 (Firebase login, 100-cap, anon→uid migration) are **not done** — see
 `specs/007-user-auth/plan.md` and the latest `progress.md` session.
 
-**Most recent session: 2026-06-17 (production-readiness pass, below) — gunicorn/Procfile, fail-closed
-SECRET_KEY, cookie hardening, pip `requirements.txt`.** Before that: require non-empty player rows +
+**Most recent session: 2026-06-17 (hide source label in UI, below) — dropped the "USCF" badge/legend
+next to player names.** Before that: production-readiness pass (gunicorn/Procfile, fail-closed
+SECRET_KEY, cookie hardening, pip `requirements.txt`). Before that: require non-empty player rows +
 remove source filter; remove manual refresh; cache TTL; paste-a-list bulk input + FIDE temporarily
 disabled (all same day); spec 007 Phases 0 & 1 (`progress.md` 2026-05-30). The 2026-05-28 notes below
 predate the cache/library rework — treat `progress.md` + `CLAUDE.md` as canonical where they differ.
+
+---
+
+## Session 2026-06-17 — hide the source ("USCF") label next to player names
+
+User asked to drop the source tag shown beside player names. Since the app is USCF-only in the UI for
+now, the badge was redundant noise. Removed in three spots:
+
+- **Analyze chart legend** — `analyze.html` dataset label `p.name + ' (' + source + ')'` → just `p.name`.
+- **Analyze player picker** — the `<span class="badge badge-{source}">` next to each `.picker-name`.
+- **Main page library list** — the same badge next to each saved player's name in `index.html`.
+
+`compare.html` has the same badge + legend pattern but is a **dead template** (the `/compare` route
+redirects to `/analyze`), so it was intentionally left as-is. The `.badge`/`badge-uscf` CSS is kept
+(harmless, still referenced by the dead template). **Verified:** all templates compile; `GET /`
+renders 200 with no `badge-uscf` in the output.
+
+Files: `webapp/templates/analyze.html`, `webapp/templates/index.html`.
 
 ---
 

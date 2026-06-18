@@ -34,7 +34,6 @@
                    {{ 'checked' if key in initial_selected else '' }}>
             <span class="picker-swatch" data-key="{{ key }}"></span>
             <span class="picker-name">{{ p.name }}</span>
-            <span class="badge badge-{{ p.source }}">{{ p.source|upper }}</span>
           </label>
           {% if key in saved_keys %}
             <form method="POST" action="{{ url_for('main.remove_from_library') }}" class="inline picker-save">
@@ -118,7 +117,7 @@
   function datasetFor(key, valueKey) {
     const p = playerByKey[key];
     return {
-      label: p.name + ' (' + p.source.toUpperCase() + ')',
+      label: p.name,
       data: p[valueKey],
       borderColor: colorByKey[key],
       backgroundColor: colorByKey[key],

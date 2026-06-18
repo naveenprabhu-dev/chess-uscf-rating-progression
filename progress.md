@@ -825,3 +825,15 @@ config is import-clean. Files: `run.py`, `webapp/__init__.py`, `requirements.txt
 **Still open from the publish list:** #4 host choice, #5 scraping-from-datacenter-IP / Cloudflare (must
 test on the real host), #6 rate-limit `/scrape` (IP-ban risk — recommended next), #8 DOB-of-minors
 privacy + uschess.org ToS, plus polish (no tests, custom error pages, stale cache-reset flash text).
+
+### 2026-06-17 (follow-up 7) — Remove the source ("USCF") label next to player names
+User asked to drop the source tag beside player names (UI is USCF-only for now, so it's redundant).
+Removed in the three places it showed:
+- `webapp/templates/analyze.html`: the Chart.js dataset label (`p.name + ' (' + p.source.toUpperCase()
+  + ')'` → `p.name`) and the `<span class="badge badge-{{ p.source }}">` in the analyze player picker.
+- `webapp/templates/index.html`: the same badge span next to each saved player in the "My library" list.
+
+Left alone on purpose: `compare.html` (same badge + legend pattern, but it's a dead template — `/compare`
+redirects to `/analyze`); the `.badge`/`badge-uscf` CSS (harmless, still used by the dead template).
+**Verified (`uscf-scraper` env):** all four templates (analyze/index/compare/player) compile via the
+Jinja env; `GET /` returns 200 with no `badge-uscf` in the HTML. Files: `analyze.html`, `index.html`.
