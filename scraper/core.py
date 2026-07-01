@@ -8,7 +8,7 @@ from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup, Comment
 from dateutil.relativedelta import relativedelta
 
-from config import DEFAULT_RATING_MILESTONES, DEFAULT_FIDE_MILESTONES
+from config import DEFAULT_RATING_MILESTONES, DEFAULT_FIDE_MILESTONES, USCF_INCLUDE_FOREIGN
 
 log = logging.getLogger(__name__)
 
@@ -362,21 +362,41 @@ def _fetch_history_html(session, uscf_id, progress_cb=None):
     }
 
 
-def fetch_history(session, uscf_id, progress_cb=None, status_cb=None):
+def fetch_history(session, uscf_id, progress_cb=None, status_cb=None, fallback_cb=None,
+                  crosstable_cache=None):
     """Fetch a USCF player's raw rating timeline (spec 007 Part 3b). Tries the
     fast JSON API first, then falls back to HTML scraping. Returns the cacheable,
     DOB/milestone-independent timeline; call `compute_record` to derive the
-    per-user milestone view."""
+    per-user milestone view.
+
+    Uses the foreign-inclusive API client unless `config.USCF_INCLUDE_FOREIGN` is
+    off, in which case the pre-2026-07 `uscf_api_legacy` client is used (the same
+    `ApiUnavailable` class either way, so the fallback below still catches it).
+    `crosstable_cache` is passed through only to the foreign-inclusive client.
+
+    `fallback_cb()` (no args) fires once if the API is unavailable and we drop to
+    the slow HTML scraper — the web UI uses it to surface the "slower / no data
+    after Nov 2025" notice and a Cancel button."""
     _emit(status_cb, "Trying US Chess API…")
     try:
-        from scraper.uscf_api import fetch_history_api, ApiUnavailable
-        timeline = fetch_history_api(
-            uscf_id, progress_cb=progress_cb, status_cb=status_cb,
-        )
+        from scraper.uscf_api import ApiUnavailable
+        if USCF_INCLUDE_FOREIGN:
+            from scraper.uscf_api import fetch_history_api
+            timeline = fetch_history_api(
+                uscf_id, progress_cb=progress_cb, status_cb=status_cb,
+                crosstable_cache=crosstable_cache,
+            )
+        else:
+            from scraper.uscf_api_legacy import fetch_history_api
+            timeline = fetch_history_api(
+                uscf_id, progress_cb=progress_cb, status_cb=status_cb,
+            )
         _emit(status_cb, "US Chess API succeeded")
         return timeline
     except ApiUnavailable as e:
         _emit(status_cb, f"US Chess API unavailable ({e}) — falling back to HTML scraping")
+        if fallback_cb:
+            fallback_cb()
 
     _emit(status_cb, "Scraping US Chess tournament pages (this is the slow path)…")
     return _fetch_history_html(session, uscf_id, progress_cb=progress_cb)
@@ -417,6 +437,7 @@ def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True
     games_reached = [None] * n
     ages_reached = [None] * n
     scores_reached = [None] * n
+    dates_reached = [None] * n
 
     start_index = 0
     for event in timeline.get("events", []):
@@ -436,6 +457,7 @@ def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True
             games_reached[start_index] = event.get("cumulative_games")
             ages_reached[start_index] = calculate_age(dob, event["date"]) if dob else None
             scores_reached[start_index] = score_pct
+            dates_reached[start_index] = event["date"]
             start_index += 1
 
     milestone_data = {}
@@ -445,6 +467,9 @@ def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True
             "games": games_reached[i],
             "age": ages_reached[i],
             "score_pct": scores_reached[i],
+            # First event whose rating reached this threshold ("YYYY-MM-DD"),
+            # so the charts can show WHEN it was achieved (on hover).
+            "date": dates_reached[i],
         }
 
     player_id = str(timeline["player_id"])

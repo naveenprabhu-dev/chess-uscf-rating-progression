@@ -3,17 +3,29 @@
 
 {% block content %}
 <section class="card">
-  <h1>Scraping {{ entries|length }} {{ source|upper }} player{{ '' if entries|length == 1 else 's' }}</h1>
+  <h1>Scraping {{ players|length }} {{ source|upper }} player{{ '' if players|length == 1 else 's' }}</h1>
   <p class="muted small">{{ source|upper }} is queried one player at a time.
      {% if source == 'fide' %}FIDE fetches each rated period to compute scores, so the bar advances per period.{% else %}USCF can take up to a couple of minutes per player.{% endif %}
      Stay on this page; we'll redirect you to the charts when it's done.</p>
 
+  {# Shown only if the US Chess API drops to the slow HTML scraper for a player. #}
+  <div class="fallback-notice" id="fallback-notice" hidden>
+    <p>
+      <strong>Heads up:</strong> the US Chess API is unavailable, so we're using the
+      <strong>slower</strong> web scraper for one or more players. The scraper
+      <strong>won't include tournaments after Nov 2025</strong>.
+    </p>
+    <button type="button" class="link-button" id="fallback-cancel">
+      Cancel &amp; use the players already finished
+    </button>
+  </div>
+
   <ul class="scrape-progress">
-    {% for uscf_id, _ in entries %}
+    {% for p in players %}
       <li id="progress-{{ loop.index0 }}" data-idx="{{ loop.index0 }}">
         <div class="scrape-header">
           <strong>Player {{ loop.index }}</strong>
-          <code>{{ uscf_id }}</code>
+          <span class="scrape-name">{{ p.name or ('#' ~ p.uscf_id) }}</span>
           <span class="scrape-status muted small">queued</span>
         </div>
         <div class="progress-bar"><div class="progress-fill"></div></div>
@@ -29,12 +41,21 @@
 </section>
 
 <script>
+  const SOURCE = "{{ source }}";
+  const ANALYZE_URL = "{{ url_for('main.analyze') }}";
+  const HOME_URL = "{{ url_for('main.index') }}";
   const evt = new EventSource("{{ url_for('main.scrape_stream') }}");
   let hadError = false;
+  const doneIds = [];                       // "source:id" for every finished player
 
   function setStatus(idx, text) {
     const el = document.querySelector(`#progress-${idx} .scrape-status`);
     if (el) el.textContent = text;
+  }
+  function setName(idx, name) {
+    if (!name) return;
+    const el = document.querySelector(`#progress-${idx} .scrape-name`);
+    if (el) el.textContent = name;
   }
   function setFill(idx, pct) {
     const el = document.querySelector(`#progress-${idx} .progress-fill`);
@@ -44,11 +65,16 @@
     const el = document.querySelector(`#progress-${idx} .progress-caption`);
     if (el) el.textContent = text;
   }
+  function analyzeUrlFor(ids) {
+    if (!ids.length) return HOME_URL;
+    return ANALYZE_URL + '?' + ids.map(id => 'ids=' + encodeURIComponent(id)).join('&');
+  }
 
   evt.onmessage = (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch (err) { return; }
     if (m.type === 'player_start') {
+      setName(m.player_idx, m.name);
       setStatus(m.player_idx, 'scraping…');
     } else if (m.type === 'status') {
       setStatus(m.player_idx, m.message);
@@ -56,9 +82,19 @@
       const pct = m.total ? Math.round(100 * m.current / m.total) : 0;
       setFill(m.player_idx, pct);
       setCaption(m.player_idx, `${m.current} / ${m.total} tournaments`);
-    } else if (m.type === 'player_done') {
+    } else if (m.type === 'player_cached') {
+      setName(m.player_idx, m.name);
       setFill(m.player_idx, 100);
-      setStatus(m.player_idx, `done${m.name ? ' — ' + m.name : ''}`);
+      setCaption(m.player_idx, 'Player already previously analyzed!');
+    } else if (m.type === 'fallback') {
+      const li = document.getElementById(`progress-${m.player_idx}`);
+      if (li) li.classList.add('progress-fallback');
+      document.getElementById('fallback-notice').hidden = false;
+    } else if (m.type === 'player_done') {
+      setName(m.player_idx, m.name);
+      setFill(m.player_idx, 100);
+      setStatus(m.player_idx, 'done');
+      if (m.uscf_id) doneIds.push(`${SOURCE}:${m.uscf_id}`);
     } else if (m.type === 'player_error') {
       hadError = true;
       const li = document.getElementById(`progress-${m.player_idx}`);
@@ -66,6 +102,13 @@
       setStatus(m.player_idx, `error: ${m.error}`);
     }
   };
+
+  // Cancel: stop listening and jump straight to the charts for whoever finished.
+  // (The worker keeps running server-side and caches the rest — harmless.)
+  document.getElementById('fallback-cancel').addEventListener('click', () => {
+    evt.close();
+    window.location = analyzeUrlFor(doneIds);
+  });
 
   evt.addEventListener('done', (e) => {
     evt.close();

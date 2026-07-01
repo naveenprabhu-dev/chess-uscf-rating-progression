@@ -1,6 +1,6 @@
 import os
 
-DEFAULT_USCF_MILESTONES = list(range(400, 3100, 100))   # 400, 500, …, 3000
+DEFAULT_USCF_MILESTONES = list(range(400, 3100, 200))   # 400, 600, …, 3000 (by 200s — less chart clutter)
 DEFAULT_FIDE_MILESTONES = list(range(1400, 3000, 100))  # 1400, 1500, …, 2900
 
 # Back-compat alias — existing code/imports expect DEFAULT_RATING_MILESTONES.
@@ -30,4 +30,18 @@ def _env_int(name, default):
         return default
 
 
+def _env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 CACHE_TTL_DAYS = _env_int("CACHE_TTL_DAYS", 7)
+
+# USCF scraper: include a player's no-affiliate FIDE/foreign events (which carry
+# a Regular rating record) so the regular-rating timeline is complete — e.g. so
+# Caruana's 2600→2800 climb spans 2008→2011 instead of collapsing into one 2014
+# jump. Default on. Set USCF_INCLUDE_FOREIGN=0 to revert to the pre-2026-07
+# client (scraper/uscf_api_legacy.py). Read once at import (restart to change).
+USCF_INCLUDE_FOREIGN = _env_bool("USCF_INCLUDE_FOREIGN", True)

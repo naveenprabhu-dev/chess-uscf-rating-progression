@@ -105,6 +105,15 @@
   const identity = (v) => v;
   const percent = (v) => (v == null ? v : (v * 100).toFixed(1) + '%');
 
+  // "2014-08-27" → "Aug 2014" for the tooltip's "achieved …" line.
+  const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const monthYear = (iso) => {
+    if (!iso) return '';
+    const parts = String(iso).split('-');
+    const mi = parseInt(parts[1], 10) - 1;
+    return (MONTHS[mi] || '?') + ' ' + parts[0];
+  };
+
   // Background-fill plugin so saved PNGs aren't transparent.
   const bgPlugin = {
     id: 'solidBg',
@@ -162,6 +171,12 @@
             callbacks: {
               title: (items) => items.length ? 'Rating ' + items[0].label : '',
               label: (ctx) => `${ctx.dataset.label}: ${formatter(ctx.parsed.y)}`,
+              // Show WHEN this rating was achieved (month + year) under the value.
+              afterLabel: (ctx) => {
+                const p = playerByKey[ctx.dataset._playerKey];
+                const d = p && p.dates ? p.dates[ctx.dataIndex] : null;
+                return d ? 'achieved ' + monthYear(d) : '';
+              },
             },
           },
         },

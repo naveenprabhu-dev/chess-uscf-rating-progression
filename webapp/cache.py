@@ -41,6 +41,23 @@ CREATE TABLE IF NOT EXISTS saved_analyses (
 )
 """
 
+# One member's W/D/L/games in a foreign (no-affiliate) event, harvested from the
+# event crosstable during a USCF scrape. Shared/permanent: a finalized event's
+# result never changes, so this is fetched once ever — cheap re-scrapes and
+# cheap for other players who shared the event.
+CROSSTABLE_CACHE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS crosstable_cache (
+    event_id TEXT NOT NULL,
+    section_number INTEGER NOT NULL,
+    member_id TEXT NOT NULL,
+    wins INTEGER NOT NULL,
+    draws INTEGER NOT NULL,
+    losses INTEGER NOT NULL,
+    games INTEGER NOT NULL,
+    PRIMARY KEY (event_id, section_number, member_id)
+)
+"""
+
 
 def _db_path():
     return Path(current_app.instance_path) / "cache.sqlite3"
@@ -81,6 +98,7 @@ def init_db(app):
         conn.executescript(SCRAPE_CACHE_SCHEMA)
         conn.executescript(USERS_SCHEMA)
         conn.executescript(SAVED_ANALYSES_SCHEMA)
+        conn.executescript(CROSSTABLE_CACHE_SCHEMA)
     app.config["CACHE_WAS_RESET"] = reset
 
 
@@ -144,3 +162,45 @@ def is_timeline_stale(timeline, max_age_days):
         scraped = scraped.replace(tzinfo=timezone.utc)
     age = datetime.now(timezone.utc) - scraped
     return age.total_seconds() > max_age_days * 86400
+
+
+# ── Foreign-event crosstable cache ──────────────────────────────────────────────
+# Backs `SqliteCrosstableCache`, injected into the USCF scraper so a foreign
+# event's per-member game counts are fetched once, ever.
+
+def get_crosstable_counts(event_id, section_number, member_id):
+    db = get_db()
+    row = db.execute(
+        "SELECT wins, draws, losses, games FROM crosstable_cache "
+        "WHERE event_id = ? AND section_number = ? AND member_id = ?",
+        (str(event_id), int(section_number or 0), str(member_id)),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"wins": row["wins"], "draws": row["draws"],
+            "losses": row["losses"], "games": row["games"]}
+
+
+def save_crosstable_counts(event_id, section_number, member_id, counts):
+    db = get_db()
+    db.execute(
+        "INSERT INTO crosstable_cache "
+        "(event_id, section_number, member_id, wins, draws, losses, games) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(event_id, section_number, member_id) DO UPDATE SET "
+        "wins=excluded.wins, draws=excluded.draws, losses=excluded.losses, games=excluded.games",
+        (str(event_id), int(section_number or 0), str(member_id),
+         counts["wins"], counts["draws"], counts["losses"], counts["games"]),
+    )
+    db.commit()
+
+
+class SqliteCrosstableCache:
+    """get/put adapter the scraper calls (it stays Flask-agnostic — it only sees
+    these two methods). Must be used inside an app context (the scrape worker is)."""
+
+    def get(self, event_id, section_number, member_id):
+        return get_crosstable_counts(event_id, section_number, member_id)
+
+    def put(self, event_id, section_number, member_id, counts):
+        save_crosstable_counts(event_id, section_number, member_id, counts)

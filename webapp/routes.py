@@ -9,7 +9,7 @@ from flask import (
     render_template, request, session, stream_with_context, url_for,
 )
 
-from config import ANON_SAVE_LIMIT, CACHE_TTL_DAYS
+from config import ANON_SAVE_LIMIT, CACHE_TTL_DAYS, USCF_INCLUDE_FOREIGN
 from scraper import (
     DEFAULT_USCF_MILESTONES, DEFAULT_FIDE_MILESTONES,
     make_session, compute_record, fetch_history, fetch_fide_history,
@@ -17,9 +17,11 @@ from scraper import (
 )
 from scraper.core import NoClassicalTournaments, PlayerNotFound
 from scraper.fide import FideNoRatedHistory, FidePlayerNotFound, FideScrapeError
+from scraper.uscf_api import TIMELINE_API_VERSION
 
-from .cache import get_timeline, is_timeline_stale, save_timeline
+from .cache import get_timeline, is_timeline_stale, save_timeline, SqliteCrosstableCache
 from .forms import normalize_source, parse_milestones, parse_player_inputs
+from .presets import FEATURED_PLAYERS
 
 bp = Blueprint("main", __name__)
 
@@ -135,12 +137,23 @@ def _safe_next(default):
     return nxt if nxt.startswith("/") else default
 
 
-def _fetch_timeline(source, player_id, progress_cb=None, status_cb=None):
-    """Dispatch to the right scraper for a single player's RAW timeline."""
+def _fetch_timeline(source, player_id, progress_cb=None, status_cb=None, fallback_cb=None):
+    """Dispatch to the right scraper for a single player's RAW timeline.
+    `fallback_cb` only applies to USCF (fired when the API drops to HTML scraping)."""
     http = make_session()
     if source == "fide":
         return fetch_fide_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb)
-    return fetch_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb)
+    # SQLite-backed crosstable cache so foreign-event game counts are fetched once.
+    return fetch_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb,
+                         fallback_cb=fallback_cb, crosstable_cache=SqliteCrosstableCache())
+
+
+def _timeline_outdated(source, timeline):
+    """A cached USCF timeline from before the foreign-event fix (or an older
+    timeline version) should be re-scraped even when it isn't time-stale."""
+    if source != "uscf" or not USCF_INCLUDE_FOREIGN:
+        return False
+    return (timeline or {}).get("api_version") != TIMELINE_API_VERSION
 
 
 def _valid_source_or_404(source):
@@ -179,6 +192,7 @@ def index():
         default_uscf=DEFAULT_USCF_MILESTONES,
         default_fide=DEFAULT_FIDE_MILESTONES,
         prefill=prefill,
+        featured_players=FEATURED_PLAYERS,
     )
 
 
@@ -227,7 +241,14 @@ def scrape_progress():
     if not entries:
         flash("Nothing to scrape. Submit the form again.", "error")
         return redirect(url_for("main.index"))
-    return render_template("progress.html", entries=entries, source=source)
+    # Show the player's NAME (not the bare ID) in the header. It's known up front
+    # for anyone already cached; brand-new players show "#<id>" until the scrape
+    # resolves the name (the stream then fills it in).
+    players = []
+    for pid, _dob in entries:
+        tl = get_timeline(source, pid)
+        players.append({"uscf_id": pid, "name": (tl or {}).get("name")})
+    return render_template("progress.html", players=players, source=source)
 
 
 @bp.route("/scrape/stream")
@@ -260,24 +281,34 @@ def scrape_stream():
                             "player_idx": _idx,
                             "message": message,
                         })
-                    q.put({"type": "player_start", "player_idx": idx, "uscf_id": player_id})
+                    def fallback_cb(_idx=idx):
+                        # USCF API gave up → the slow HTML scraper takes over.
+                        # Drives the "slower / no data after Nov 2025" notice and
+                        # the Cancel button on the progress page.
+                        q.put({"type": "fallback", "player_idx": _idx})
                     try:
                         # Fresh cache hit → reuse the raw timeline, no network
                         # (spec 007 Part 7: only brand-new players trigger a
                         # scrape). A cache older than CACHE_TTL_DAYS is re-scraped
                         # here so new tournaments show up — the only re-scrape path.
                         timeline = get_timeline(source, player_id)
-                        if timeline is not None and not is_timeline_stale(timeline, CACHE_TTL_DAYS):
-                            status_cb("Already analyzed — using cached data (no re-scrape).")
-                            cb(1, 1)
+                        cached_name = (timeline or {}).get("name")
+                        q.put({"type": "player_start", "player_idx": idx,
+                               "uscf_id": player_id, "name": cached_name})
+                        fresh = (timeline is not None
+                                 and not is_timeline_stale(timeline, CACHE_TTL_DAYS)
+                                 and not _timeline_outdated(source, timeline))
+                        if fresh:
+                            # Already analyzed and fresh — no "X / Y tournaments"
+                            # bar; the page just says so.
+                            q.put({"type": "player_cached", "player_idx": idx,
+                                   "name": cached_name})
                         else:
                             if timeline is not None:
-                                status_cb(
-                                    f"Cached data is over {CACHE_TTL_DAYS} days old — "
-                                    "re-scraping for the latest ratings."
-                                )
+                                status_cb("Refreshing cached data — re-scraping for the latest ratings.")
                             timeline = _fetch_timeline(source, player_id,
-                                                       progress_cb=cb, status_cb=status_cb)
+                                                       progress_cb=cb, status_cb=status_cb,
+                                                       fallback_cb=fallback_cb)
                             save_timeline(timeline)
                         scraped_ids.append(f"{source}:{player_id}")
                         q.put({
@@ -387,8 +418,7 @@ def save_to_library():
     saved = _saved()
     if len(saved) >= ANON_SAVE_LIMIT:
         flash(
-            f"You've reached the {ANON_SAVE_LIMIT}-save limit for this browser. "
-            "Signing in to save more is coming soon.",
+            f"You've reached the maximum of {ANON_SAVE_LIMIT} saved players.",
             "error",
         )
         return redirect(next_url)
@@ -497,6 +527,7 @@ def _chart_player(p, milestones):
         "games": [p["milestones"].get(str(m), {}).get("games") for m in milestones],
         "age": [p["milestones"].get(str(m), {}).get("age") for m in milestones],
         "score": [p["milestones"].get(str(m), {}).get("score_pct") for m in milestones],
+        "dates": [p["milestones"].get(str(m), {}).get("date") for m in milestones],
     }
 
 

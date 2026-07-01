@@ -31,3 +31,28 @@ timeout = int(os.environ.get("TIMEOUT", "120"))
 accesslog = "-"
 errorlog = "-"
 loglevel = os.environ.get("LOG_LEVEL", "info")
+
+
+def when_ready(server):
+    """One-time warm of the featured-player cache after the workers are up.
+
+    Runs once per deploy in the gunicorn ARBITER (not per worker), in a daemon
+    thread so it never blocks request serving. `warm_featured` is idempotent +
+    paced, so redeploys are cheap and it can't hammer USCF. Best-effort: any
+    failure is logged and swallowed — warming must never take the site down.
+    Disable with WARM_FEATURED_ON_BOOT=0."""
+    if os.environ.get("WARM_FEATURED_ON_BOOT", "1") != "1":
+        return
+    import threading
+
+    def _run():
+        try:
+            from webapp import create_app
+            from webapp.warm import warm_featured
+            app = create_app()
+            with app.app_context():
+                warm_featured(logger=server.log.info)
+        except Exception as e:  # noqa: BLE001 - best-effort, never crash the arbiter
+            server.log.warning("featured-cache warm skipped: %s", e)
+
+    threading.Thread(target=_run, daemon=True, name="warm-featured").start()

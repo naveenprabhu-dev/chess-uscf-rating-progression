@@ -22,7 +22,7 @@
         <input type="radio" name="source" value="fide" disabled>
         FIDE <span class="coming-soon-tag">coming soon</span>
       </label>
-      <span class="muted small">USCF only for now — FIDE support is on the way.</span>
+      <span class="muted small">USCF only for now — FIDE support is on the way!</span>
     </fieldset>
 
     <div class="count-control">
@@ -30,6 +30,44 @@
               aria-expanded="false" aria-controls="bulk-panel">Paste a list</button>
       <span class="muted small">Add players one at a time, or paste a whole list.</span>
     </div>
+
+    {# Featured players: one-click presets. Each carries a verified USCF ID + a
+       public birthdate; clicking drops the player into the next open row below
+       (see the addPreset() handler in the script). #}
+    {% if featured_players %}
+    <div class="featured" id="featured">
+      <div class="featured-head">
+        <span class="featured-title">Quick add</span>
+        <span class="muted small">Click a player to add them (birthdate included) to the form below.</span>
+      </div>
+      <ul class="featured-grid">
+        {% for fp in featured_players %}
+        <li>
+          <button type="button" class="preset-card"
+                  data-uscf-id="{{ fp.uscf_id }}"
+                  data-dob="{{ fp.dob }}"
+                  data-name="{{ fp.name }}"
+                  title="Add {{ fp.name }} — USCF #{{ fp.uscf_id }}, born {{ fp.dob }}">
+            <img class="preset-photo" loading="lazy" width="64" height="64"
+                 src="{{ url_for('static', filename='players/' ~ fp.photo) }}"
+                 alt="Portrait of {{ fp.name }}">
+            <span class="preset-name">{{ fp.name }}</span>
+          </button>
+        </li>
+        {% endfor %}
+      </ul>
+      <span class="field-hint preset-status" id="preset-status" aria-live="polite"></span>
+      <details class="photo-credits">
+        <summary>Photo credits</summary>
+        <ul class="muted small">
+          {% for fp in featured_players %}
+          <li>{{ fp.name }} — photo by {{ fp.photo_by }}, {{ fp.photo_license }},
+            <a href="{{ fp.photo_source }}" target="_blank" rel="noopener noreferrer">via Wikimedia Commons</a> (resized).</li>
+          {% endfor %}
+        </ul>
+      </details>
+    </div>
+    {% endif %}
 
     {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
        then "Fill rows" pairs them by position and populates the rows below. #}
@@ -132,7 +170,7 @@
             <button type="button" class="link-button reset-milestones" data-default="{{ default_uscf|join(', ') }}">Reset to default</button>
             <span class="save-status muted small" aria-live="polite"></span>
           </div>
-          <p class="muted small">Default: 400 – 3000 by 100s</p>
+          <p class="muted small">Default: 400 – 3000 by 200s</p>
         </form>
       </div>
       <div class="milestone-panel" id="milestone-panel-fide"{{ ' hidden' if source != 'fide' else '' }}>
@@ -515,6 +553,52 @@ document.getElementById('bulk-fill-btn').addEventListener('click', () => {
     bulkStatus.textContent = '';
     openBulk(false);
   }
+});
+
+// ── Featured players: one-click add (appends into the next open row) ──────────
+// Each card carries a verified USCF ID + a public birthdate. We drop the player
+// into the first empty row (or a fresh one), putting the name in the visible
+// field and the ID in the hidden field — exactly like picking from search — so
+// the submit validator sees a resolved ID. Repeated clicks accumulate players.
+function firstOpenRowIndex() {
+  const searches = rowsContainer.querySelectorAll('.player-search-input');
+  for (let i = 0; i < searches.length; i++) {
+    const hidden = document.getElementById(`uscf_id_${i}`);
+    if (!searches[i].value.trim() && !(hidden && hidden.value.trim())) return i;
+  }
+  return -1;
+}
+
+function presetAlreadyAdded(id) {
+  return Array.from(rowsContainer.querySelectorAll('input[id^="uscf_id_"]'))
+    .some(h => h.value.trim() === id);
+}
+
+function addPreset(id, dob, name) {
+  const status = document.getElementById('preset-status');
+  if (status) { status.textContent = ''; status.classList.remove('hint-error', 'hint-warning'); }
+  if (presetAlreadyAdded(id)) {
+    if (status) { status.textContent = `${name} is already in the list.`; status.classList.add('hint-warning'); }
+    return;
+  }
+  let idx = firstOpenRowIndex();
+  if (idx === -1) {                       // no empty row — grow by one
+    setRowCount(rowCount() + 1);
+    idx = rowCount() - 1;
+  }
+  const search = document.getElementById(`player_search_${idx}`);
+  const hidden = document.getElementById(`uscf_id_${idx}`);
+  const dobEl = document.querySelector(`[name="dob_${idx}"]`);
+  if (search) search.value = name;        // visible field shows the name…
+  if (hidden) hidden.value = id;          // …hidden field carries the ID that submits
+  if (dobEl) { dobEl.value = dob || ''; clearDobError(dobEl); }
+  setHint(idx, `Added #${id}`, false);
+  goToPage(pageOf(idx));                   // reveal the row we just filled
+  if (status) status.textContent = `Added ${name}.`;
+}
+
+document.querySelectorAll('.preset-card').forEach(btn => {
+  btn.addEventListener('click', () => addPreset(btn.dataset.uscfId, btn.dataset.dob, btn.dataset.name));
 });
 
 // ── Live player search (event-delegated so dynamic rows work) ─────────────────
