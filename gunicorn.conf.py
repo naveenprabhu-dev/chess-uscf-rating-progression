@@ -31,33 +31,3 @@ timeout = int(os.environ.get("TIMEOUT", "120"))
 accesslog = "-"
 errorlog = "-"
 loglevel = os.environ.get("LOG_LEVEL", "info")
-
-
-def when_ready(server):
-    """Seed the featured-player cache from BUNDLED data once the workers are up.
-
-    Runs once per deploy in the gunicorn ARBITER (not per worker), in a daemon
-    thread so it never blocks request serving. `seed_featured` inserts the shipped
-    timelines for any featured player the cache is missing — no network, just a
-    few small INSERTs — so a fresh volume gets them instantly and there are ZERO
-    USCF calls at request time. Idempotent: once the volume holds the data it's a
-    no-op. Best-effort: any failure is logged and swallowed. Disable with
-    SEED_FEATURED_ON_BOOT=0.
-
-    (This replaced a scrape-on-boot warm that hammered the SQLite-on-volume and
-    made the site slow right after a deploy.)"""
-    if os.environ.get("SEED_FEATURED_ON_BOOT", "1") != "1":
-        return
-    import threading
-
-    def _run():
-        try:
-            from webapp import create_app
-            from webapp.seed import seed_featured
-            app = create_app()
-            with app.app_context():
-                seed_featured(logger=server.log.info)
-        except Exception as e:  # noqa: BLE001 - best-effort, never crash the arbiter
-            server.log.warning("featured-cache seed skipped: %s", e)
-
-    threading.Thread(target=_run, daemon=True, name="seed-featured").start()

@@ -37,13 +37,10 @@ the US Chess rating, but the old `RatingSource="R"` request dropped them (their 
   (crosstable calls), cached re-scrape ~7 s. **Never re-add the Regular filter.**
 
 ## Recent history (brief)
-- **2026-07-01:** featured players ship pre-cached. `webapp/seed_data/featured_timelines.json`
-  bundles all 10 quick-add players' raw timelines; gunicorn's `when_ready` hook runs
-  `webapp/seed.seed_featured` once per deploy to insert any the volume is missing — no network, a
-  few small INSERTs, idempotent, `SEED_FEATURED_ON_BOOT=0` to disable. This is how the Railway
-  volume cache gets populated (no direct write path to it). Replaced an earlier scrape-on-boot warm
-  (`webapp/warm.py`, kept for LOCAL/manual cache warming + regenerating the seed) that hammered the
-  SQLite-on-volume and made the site slow (HTTP 499s) right after a deploy.
+- **2026-07-01:** attempted to pre-populate the Railway cache for the 10 quick-add players (boot
+  warm → bundled seed); prod started hanging (Railway edge → container 499s), so **reverted all of
+  it** — no cache-warming on Railway now; featured players cache lazily on first analyze. Prod-hang
+  root cause still open (suspect newer app deploy or Railway infra). See progress.md.
 - **2026-06-30:** featured-player presets; progress-page UX (names, "already analyzed", API→HTML
   fallback notice + Cancel); milestone-date "achieved Mon YYYY" hover; default USCF ladder 400–3000
   by 200s; save-limit copy reworded.

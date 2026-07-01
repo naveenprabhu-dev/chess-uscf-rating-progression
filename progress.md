@@ -86,28 +86,15 @@ Caruana's 2600/2800 climb into one 2014 jump.
 ## 2026-07-01 — Docs condensed
 Condensed `CLAUDE.md`, `progress.md`, and `handoff.md` for brevity (docs only, no code change).
 
-## 2026-07-01 — Featured-cache warm on boot
-- `webapp/warm.py` (new): `warm_featured()` pre-populates `scrape_cache` for every quick-add player
-  (`FEATURED_PLAYERS`) via the API path ONLY (`fetch_history_api`, no HTML fallback), guarding on
-  api_version 2 + a non-ALL-CAPS name so no scraper record is ever cached for them. Idempotent
-  (skips fresh, API-shaped entries), paced + retried against USCF 429s. Runnable by hand:
-  `python -m webapp.warm`.
-- `gunicorn.conf.py`: `when_ready` hook fires the warm once per deploy (arbiter only, not per
-  worker), in a daemon thread so it never blocks serving. `WARM_FEATURED_ON_BOOT=0` disables it.
-  This is how the Railway volume cache gets warmed — there's no direct write path to it.
-- Warmed the local cache: all 10 featured players now cached as clean API v2 entries (Caruana 741,
-  Nakamura 476, Niemann 442, Liang 341, Sevian 269, Shankland 315, Robson 268, Xiong 424, Mishra
-  325, Woodward 199 events). The stale ALL-CAPS HTML entry for Xiong (and Niemann) is gone.
-
-## 2026-07-01 — Replaced boot-warm with a bundled seed (fixes post-deploy slowness)
-- The scrape-on-boot warm scraped 10 heavy players on every deploy and wrote hundreds of rows to the
-  SQLite file on the freshly-attached Railway volume, contending with request-serving reads → the
-  live site went slow / returned HTTP 499 (client-closed) right after deploys.
-- Replaced it: `webapp/seed_data/featured_timelines.json` (380 KB) bundles the 10 players' raw
-  timelines (exported from the warmed local cache). `webapp/seed.py:seed_featured` inserts any the
-  cache is missing — no network, a few small INSERTs, idempotent (never clobbers a fresher real
-  scrape). `when_ready` now calls the seed, not the warm (`SEED_FEATURED_ON_BOOT=0` to disable).
-- `webapp/warm.py` stays for LOCAL/manual warming (`python -m webapp.warm`) and to regenerate the
-  seed bundle; it no longer runs at boot. Live scraping still handles hand-entered players.
-- Net: fresh volume gets all 10 featured players instantly on deploy, zero USCF calls at request
-  time, no boot-time DB contention.
+## 2026-07-01 — Prod cache pre-population attempt, then fully reverted
+- Tried to pre-populate the Railway cache for the 10 quick-add players so first loads are instant:
+  first a scrape-on-boot warm (`webapp/warm.py` + a gunicorn `when_ready` hook), then a bundled
+  seed (`webapp/seed.py` + `webapp/seed_data/featured_timelines.json`) to avoid boot-time scraping.
+- Prod started hanging (Railway edge → container: gunicorn accepts but never responds; HTTP 499s).
+  Ruled out the volume (still hung after deleting it and redeploying volume-less) and the seed
+  (booted fine, `[seed] done — seeded=0 skipped=10`), but the site stayed down.
+- **Removed all of it** — `webapp/warm.py`, `webapp/seed.py`, `webapp/seed_data/`, and the
+  `when_ready` hook (`gunicorn.conf.py` back to its pre-session state). No cache-warming on Railway
+  for now; featured players cache lazily when someone analyzes them, as before. Root cause of the
+  prod hang still open (suspect the newer app deploy or Railway infra, not the cache code).
+- Local cache remains warmed (all 10 as clean API v2 entries) from `python -m webapp.warm` runs.
