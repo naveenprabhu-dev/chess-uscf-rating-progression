@@ -98,3 +98,16 @@ Condensed `CLAUDE.md`, `progress.md`, and `handoff.md` for brevity (docs only, n
 - Warmed the local cache: all 10 featured players now cached as clean API v2 entries (Caruana 741,
   Nakamura 476, Niemann 442, Liang 341, Sevian 269, Shankland 315, Robson 268, Xiong 424, Mishra
   325, Woodward 199 events). The stale ALL-CAPS HTML entry for Xiong (and Niemann) is gone.
+
+## 2026-07-01 — Replaced boot-warm with a bundled seed (fixes post-deploy slowness)
+- The scrape-on-boot warm scraped 10 heavy players on every deploy and wrote hundreds of rows to the
+  SQLite file on the freshly-attached Railway volume, contending with request-serving reads → the
+  live site went slow / returned HTTP 499 (client-closed) right after deploys.
+- Replaced it: `webapp/seed_data/featured_timelines.json` (380 KB) bundles the 10 players' raw
+  timelines (exported from the warmed local cache). `webapp/seed.py:seed_featured` inserts any the
+  cache is missing — no network, a few small INSERTs, idempotent (never clobbers a fresher real
+  scrape). `when_ready` now calls the seed, not the warm (`SEED_FEATURED_ON_BOOT=0` to disable).
+- `webapp/warm.py` stays for LOCAL/manual warming (`python -m webapp.warm`) and to regenerate the
+  seed bundle; it no longer runs at boot. Live scraping still handles hand-entered players.
+- Net: fresh volume gets all 10 featured players instantly on deploy, zero USCF calls at request
+  time, no boot-time DB contention.
