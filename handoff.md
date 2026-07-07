@@ -43,6 +43,14 @@ Carlsen, Anand, Sindarov, Niemann, Aronian; fixed what was fixable; reworked qui
   2026-07-07 — and `FEATURED_USCF` — the 10 American players. One button per card, source from the
   section, same photo when a player is in both (Caruana, Nakamura). 13 new CC/CC0 portraits from
   Wikimedia Commons (licenses verified via API; CREDITS.md + on-page credits updated).
+- **USCF is API-only now** (owner decision, same day): the MSA HTML pages froze ~Nov 2025, so the old
+  any-failure→HTML fallback served stale data. `core.fetch_history` now retries the API with waits
+  (`USCF_API_RETRY_WAITS = (5,15,30)`, plus 1 s/4 s in-call retries and 429 Retry-After handling) and
+  raises user-facing `UscfApiUnavailable` if it stays down; unknown members raise `PlayerNotFound`
+  immediately (`ApiUnavailable.retryable/not_found` classification). HTML scraper kept intact behind
+  `USCF_HTML_FALLBACK=1` (emergency only). Source badges (USCF/FIDE) now sit next to names on the
+  analyze picker, chart legends/tooltips, and the library list (player + progress pages already had
+  them).
 
 ## Previous session — 2026-07-01 (later): FIDE first-class + OlimpBase pre-2003 backfill
 FIDE went from "coming soon" to fully enabled (spec 005 Phase 6 landed, reworked per owner):

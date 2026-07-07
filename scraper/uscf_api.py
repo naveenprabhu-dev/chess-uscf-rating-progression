@@ -40,7 +40,24 @@ STANDINGS_PACE_SECONDS = 0.03
 
 
 class ApiUnavailable(Exception):
-    """Signals scrape_player to fall back to the HTML scraper."""
+    """The API couldn't produce a timeline.
+
+    `retryable` (default True) marks failures that waiting might fix — network
+    errors, 5xx/499/429, transient non-JSON bodies. `retryable=False` marks
+    PERMANENT answers (member not in the API, malformed/empty member data)
+    that `fetch_history`'s retry loop must not spin on; `not_found=True`
+    additionally identifies the "no such member" case so the caller can raise
+    a user-facing PlayerNotFound instead of an availability error.
+
+    Historically this signaled scrape_player to fall back to the HTML scraper;
+    that fallback is now opt-in only (config.USCF_HTML_FALLBACK) because the
+    MSA HTML pages stopped updating ~Nov 2025.
+    """
+
+    def __init__(self, message, retryable=True, not_found=False):
+        super().__init__(message)
+        self.retryable = retryable
+        self.not_found = not_found
 
 
 class _MemoCache:
@@ -57,13 +74,22 @@ class _MemoCache:
         self._d[(str(event_id), section_number, str(member_id))] = counts
 
 
+# Waits between in-call attempts (so one _get tolerates a ~5 s blip on its
+# own); the whole-scrape retry loop in scraper.core.fetch_history layers
+# longer waits on top for sustained outages.
+_GET_RETRY_WAITS = (1, 4)
+
+
 def _get(path, **params):
-    """GET BASE+path. Returns parsed JSON on 200, None on 404. Single retry on
-    ConnectionError/Timeout/5xx/499. Raises ApiUnavailable on any other failure.
+    """GET BASE+path. Returns parsed JSON on 200, None on 404. Retries with
+    short waits on ConnectionError/Timeout/5xx/499/429 (honoring Retry-After).
+    Raises ApiUnavailable on any other failure.
     """
     url = USCF_API_BASE + path
     last = None
-    for attempt in range(2):
+    for attempt in range(len(_GET_RETRY_WAITS) + 1):
+        if attempt:
+            time.sleep(_GET_RETRY_WAITS[attempt - 1])
         try:
             response = requests.get(url, params=params, timeout=API_TIMEOUT_SECONDS)
         except (requests.ConnectionError, requests.Timeout) as e:
@@ -76,22 +102,27 @@ def _get(path, **params):
                 raise ApiUnavailable(f"non-JSON from {url}")
         if response.status_code == 404:
             return None
-        # 499 = upstream edge timeout; treat as retryable.
-        if response.status_code == 499 or 500 <= response.status_code < 600:
+        # 499 = upstream edge timeout; 429 = rate limited. Both retryable.
+        if response.status_code in (429, 499) or 500 <= response.status_code < 600:
             last = f"{response.status_code} from {url}"
+            if response.status_code == 429:
+                retry_after = (response.headers.get("Retry-After") or "").strip()
+                if retry_after.isdigit():
+                    time.sleep(min(int(retry_after), 30))
             continue
         raise ApiUnavailable(f"{response.status_code} from {url}")
-    raise ApiUnavailable(f"after retry: {last}")
+    raise ApiUnavailable(f"after {len(_GET_RETRY_WAITS) + 1} attempts: {last}")
 
 
 def _member_detail(uscf_id):
     data = _get(f"/api/v1/members/{uscf_id}")
     if data is None:
-        raise ApiUnavailable("not in api")
+        # A 404 here is a definitive "no such member" — retrying won't help.
+        raise ApiUnavailable("not in api", retryable=False, not_found=True)
     first = (data.get("firstName") or "").strip()
     last = (data.get("lastName") or "").strip()
     if not first and not last:
-        raise ApiUnavailable("member missing name")
+        raise ApiUnavailable("member missing name", retryable=False)
     return {"name": f"{first} {last}".title()}
 
 
@@ -292,7 +323,7 @@ def fetch_history_api(uscf_id, progress_cb=None, status_cb=None, crosstable_cach
 
         sections = _list_sections(uscf_id)
         if not sections:
-            raise ApiUnavailable("no sections")
+            raise ApiUnavailable("no rated sections for this member", retryable=False)
 
         games_by_section = _list_games(uscf_id)
 
@@ -301,12 +332,13 @@ def fetch_history_api(uscf_id, progress_cb=None, status_cb=None, crosstable_cach
         first_r = _r_record(first)
         initial_rating = first_r.get("postRating") if first_r else None
         if date_of_first is None or initial_rating is None:
-            raise ApiUnavailable("first section missing date or postRating")
+            raise ApiUnavailable("first section missing date or postRating",
+                                 retryable=False)
 
         events = _build_events(uscf_id, sections, games_by_section, crosstable_cache,
                                progress_cb=progress_cb, status_cb=status_cb)
         if not events:
-            raise ApiUnavailable("no events built")
+            raise ApiUnavailable("no events built", retryable=False)
 
         return {
             "source": "uscf",

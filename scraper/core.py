@@ -8,7 +8,10 @@ from curl_cffi import requests as cffi_requests
 from bs4 import BeautifulSoup, Comment
 from dateutil.relativedelta import relativedelta
 
-from config import DEFAULT_RATING_MILESTONES, DEFAULT_FIDE_MILESTONES, USCF_INCLUDE_FOREIGN
+from config import (
+    DEFAULT_RATING_MILESTONES, DEFAULT_FIDE_MILESTONES,
+    USCF_HTML_FALLBACK, USCF_INCLUDE_FOREIGN,
+)
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +41,12 @@ class NoClassicalTournaments(Exception):
 
 class CloudflareChallenge(RuntimeError):
     """USCF MSA served a Cloudflare interstitial instead of the requested page."""
+
+
+class UscfApiUnavailable(Exception):
+    """The US Chess rating API stayed unavailable (or returned unusable data)
+    through every retry, and the stale-HTML fallback is disabled — see
+    fetch_history. The message is user-facing."""
 
 
 def make_session():
@@ -362,44 +371,93 @@ def _fetch_history_html(session, uscf_id, progress_cb=None):
     }
 
 
+# Waits (seconds) between whole-scrape US Chess API attempts — ~50 s of total
+# patience on top of the short in-call retries in uscf_api._get. Long enough to
+# ride out a rate-limit burst or edge blip, short enough that a user watching
+# the progress page isn't stranded.
+USCF_API_RETRY_WAITS = (5, 15, 30)
+
+
 def fetch_history(session, uscf_id, progress_cb=None, status_cb=None, fallback_cb=None,
                   crosstable_cache=None):
-    """Fetch a USCF player's raw rating timeline (spec 007 Part 3b). Tries the
-    fast JSON API first, then falls back to HTML scraping. Returns the cacheable,
-    DOB/milestone-independent timeline; call `compute_record` to derive the
-    per-user milestone view.
+    """Fetch a USCF player's raw rating timeline (spec 007 Part 3b) from the
+    JSON API. Returns the cacheable, DOB/milestone-independent timeline; call
+    `compute_record` to derive the per-user milestone view.
 
-    Uses the foreign-inclusive API client unless `config.USCF_INCLUDE_FOREIGN` is
-    off, in which case the pre-2026-07 `uscf_api_legacy` client is used (the same
-    `ApiUnavailable` class either way, so the fallback below still catches it).
-    `crosstable_cache` is passed through only to the foreign-inclusive client.
+    **API-only by default (2026-07, owner decision).** The old design fell back
+    to HTML scraping on ANY `ApiUnavailable` — but the MSA HTML pages stopped
+    updating around Nov 2025 (US Chess moved ratings to its new system), so a
+    transient API blip silently produced a STALE timeline. Now:
 
-    `fallback_cb()` (no args) fires once if the API is unavailable and we drop to
-    the slow HTML scraper — the web UI uses it to surface the "slower / no data
-    after Nov 2025" notice and a Cancel button."""
-    _emit(status_cb, "Trying US Chess API…")
-    try:
-        from scraper.uscf_api import ApiUnavailable
-        if USCF_INCLUDE_FOREIGN:
-            from scraper.uscf_api import fetch_history_api
-            timeline = fetch_history_api(
-                uscf_id, progress_cb=progress_cb, status_cb=status_cb,
-                crosstable_cache=crosstable_cache,
-            )
+    * transient failures (network, 5xx/499/429, non-JSON) are retried with
+      waits (`USCF_API_RETRY_WAITS`, ~50 s of patience) and a status message
+      per attempt;
+    * a persistent outage raises `UscfApiUnavailable` with a user-facing
+      message — better no data than silently-stale data;
+    * permanent answers short-circuit the retries: an unknown member raises
+      `PlayerNotFound`, unusable member data raises `UscfApiUnavailable`.
+
+    The HTML scraper (`_fetch_history_html`) is kept fully intact but is only
+    reachable with `config.USCF_HTML_FALLBACK=1` — an emergency escape hatch
+    that restores the old behavior (and its stale data). `fallback_cb()` fires
+    only on that path (drives the progress page's stale-data notice + Cancel).
+
+    Uses the foreign-inclusive API client unless `config.USCF_INCLUDE_FOREIGN`
+    is off, in which case the pre-2026-07 `uscf_api_legacy` client is used (the
+    same `ApiUnavailable` class either way). `crosstable_cache` is passed
+    through only to the foreign-inclusive client."""
+    from scraper.uscf_api import ApiUnavailable
+    if USCF_INCLUDE_FOREIGN:
+        from scraper.uscf_api import fetch_history_api
+        api_kwargs = {"crosstable_cache": crosstable_cache}
+    else:
+        from scraper.uscf_api_legacy import fetch_history_api
+        api_kwargs = {}
+
+    attempts = 1 + len(USCF_API_RETRY_WAITS)
+    last_err = None
+    for attempt in range(attempts):
+        if attempt == 0:
+            _emit(status_cb, "Trying US Chess API…")
         else:
-            from scraper.uscf_api_legacy import fetch_history_api
+            wait = USCF_API_RETRY_WAITS[attempt - 1]
+            _emit(status_cb,
+                  f"US Chess API hiccup ({last_err}) — retrying in {wait}s "
+                  f"(attempt {attempt + 1} of {attempts})…")
+            time.sleep(wait)
+        try:
             timeline = fetch_history_api(
-                uscf_id, progress_cb=progress_cb, status_cb=status_cb,
+                uscf_id, progress_cb=progress_cb, status_cb=status_cb, **api_kwargs
             )
-        _emit(status_cb, "US Chess API succeeded")
-        return timeline
-    except ApiUnavailable as e:
-        _emit(status_cb, f"US Chess API unavailable ({e}) — falling back to HTML scraping")
+            _emit(status_cb, "US Chess API succeeded")
+            return timeline
+        except ApiUnavailable as e:
+            last_err = e
+            if not getattr(e, "retryable", True):
+                break  # waiting won't change a definitive answer
+
+    if USCF_HTML_FALLBACK:
+        # Emergency escape hatch only: pre-2026-07 behavior, stale data and all.
+        _emit(status_cb, f"US Chess API unavailable ({last_err}) — falling back to HTML scraping")
         if fallback_cb:
             fallback_cb()
+        _emit(status_cb, "Scraping US Chess tournament pages (this is the slow path)…")
+        return _fetch_history_html(session, uscf_id, progress_cb=progress_cb)
 
-    _emit(status_cb, "Scraping US Chess tournament pages (this is the slow path)…")
-    return _fetch_history_html(session, uscf_id, progress_cb=progress_cb)
+    if getattr(last_err, "not_found", False):
+        raise PlayerNotFound(
+            f"USCF ID {uscf_id} was not found in the US Chess rating API."
+        )
+    if not getattr(last_err, "retryable", True):
+        raise UscfApiUnavailable(
+            f"The US Chess API returned no usable rating data for #{uscf_id} "
+            f"({last_err})."
+        )
+    raise UscfApiUnavailable(
+        "The US Chess rating API isn't responding right now "
+        f"(tried {attempts} times over ~{sum(USCF_API_RETRY_WAITS)}s: {last_err}). "
+        "Please try again in a few minutes."
+    )
 
 
 def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True):
@@ -495,9 +553,10 @@ def compute_record(timeline, dob=None, milestones=None, use_fide_birth_year=True
 
 def scrape_player(session, uscf_id, dob=None, milestones=None, progress_cb=None,
                   status_cb=None, use_fide_birth_year=True):
-    """Back-compat wrapper: fetch the raw timeline (API-first, HTML fallback) and
-    compute the public record for this DOB + milestone ladder. The fetch/compute
-    split (spec 007) lets the timeline be cached and re-derived per user."""
+    """Back-compat wrapper: fetch the raw timeline (API-only, with retries —
+    HTML fallback only via USCF_HTML_FALLBACK=1) and compute the public record
+    for this DOB + milestone ladder. The fetch/compute split (spec 007) lets
+    the timeline be cached and re-derived per user."""
     timeline = fetch_history(
         session, uscf_id, progress_cb=progress_cb, status_cb=status_cb,
     )

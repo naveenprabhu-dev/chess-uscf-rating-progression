@@ -3,8 +3,11 @@
 Flask app: enter USCF or FIDE IDs + DOBs (bulk supported; source is chosen **per row**, so one
 batch can mix both), see how many months, games, and what age a player took to reach a
 configurable set of rating milestones, plus cumulative score % at each (USCF only — FIDE has no
-score data by design). USCF's primary source is the US Chess JSON API; falls back to HTML scraping
-(only ~Oct 2025) if the API fails. Data is cached in SQLite so we don't hammer USCF; cached scrapes auto-refresh once they
+score data by design). USCF's source is the US Chess JSON API **only** (2026-07): transient API
+failures are retried with waits (~50 s patience) and a persistent outage raises a clear error —
+the old HTML fallback served stale pre-Nov-2025 data and is now reachable only via
+`USCF_HTML_FALLBACK=1` (emergency escape hatch; the HTML scraper code is kept intact). Data is
+cached in SQLite so we don't hammer USCF; cached scrapes auto-refresh once they
 pass a staleness window (`CACHE_TTL_DAYS`). Milestones are configurable per session (no accounts).
 **ALWAYS UPDATE handoff.md AND progress.md AFTER EVERY CODING CHANGE.**
 

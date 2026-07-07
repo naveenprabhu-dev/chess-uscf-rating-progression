@@ -2,7 +2,28 @@
 
 Reference material for work in `scraper/core.py`. Not loaded into every conversation — read this when editing the scraper or diagnosing fetch failures.
 
-## USCF scraping conventions (the parts that bit us before)
+## USCF JSON API — the ONLY default source (2026-07)
+
+The primary (and, by default, only) USCF source is the JSON API at `https://ratings-api.uschess.org`
+(`scraper/uscf_api.py`; endpoints and shapes in specs/006-uscf-api-source/). The HTML sections below
+describe the legacy MSA scraper — **whose data froze around Nov 2025** when US Chess moved ratings to
+its new system — so the old "any API failure → HTML fallback" design silently served stale timelines.
+Owner decision (2026-07): never fall back.
+
+- **Retry, don't reroute.** `uscf_api._get` retries each call on ConnectionError/Timeout/5xx/499/429
+  (honoring `Retry-After`, waits 1 s + 4 s); on top of that, `core.fetch_history` retries the whole
+  API fetch with `USCF_API_RETRY_WAITS = (5, 15, 30)` — ~50 s of total patience, with a progress-page
+  status line per attempt.
+- **Classified failures.** `ApiUnavailable.retryable=False` marks definitive answers that must not be
+  retried: unknown member (`not_found=True` → surfaced as `PlayerNotFound`), member with no
+  name/sections/events (→ `UscfApiUnavailable` with a per-player message). Everything else is
+  presumed transient.
+- **Persistent outage** → `UscfApiUnavailable` with a user-facing "try again in a few minutes"
+  message. Better no data than silently-stale data.
+- **Escape hatch:** `USCF_HTML_FALLBACK=1` restores the pre-2026-07 fallback (accepting stale data);
+  that's the only path into the HTML scraper below. Keep the HTML code intact — don't delete it.
+
+## USCF HTML scraping conventions (LEGACY escape-hatch path — data frozen ~Nov 2025)
 
 - All scraping hits `https://www.uschess.org/msa/MbrDtlTnmtHst.php?<uscf_id>` and `...?<uscf_id>.<page>` for paginated tournament history (50 per page).
 - A tournament row's classical rating change lives in the **third `<td>`** of the row that follows an HTML comment `Detail: <N>` (one-indexed, working backwards from most recent). Cell text looks like `1450 => 1487` or `1450 => 1487 P12`. The `P12` provisional suffix must be stripped before `int()`.

@@ -188,3 +188,26 @@ quick-add.
   2315 floor), Aronian cache-hit path, mixed Playwright batch (Carlsen FIDE + Caruana FIDE + Caruana
   USCF via the new cards) through progress → analyze charts; duplicate-add guard; Caruana's fresh
   FIDE timeline now starts Jan 2002 @ 2032 (age 9).
+
+## 2026-07-07 (later) — source badges everywhere + USCF goes API-only (no stale-HTML fallback)
+- **Source labels next to names** (owner request): the analyze picker now shows a USCF/FIDE badge per
+  player, chart legend/tooltip labels carry the source ("Caruana, Fabiano (FIDE)" vs "Fabiano
+  Caruana (USCF)" — also disambiguates the same person analyzed via both sources), and the index
+  library list gained the same badge. Player + progress pages already had badges; reused the
+  existing `.badge` styles.
+- **USCF API-only** (owner decision): the legacy MSA HTML pages stopped updating ~Nov 2025 (US Chess
+  moved to its new ratings system), so the old any-`ApiUnavailable`→HTML fallback silently served
+  STALE data whenever the API blipped. Now `core.fetch_history` retries the whole API fetch with
+  `USCF_API_RETRY_WAITS = (5, 15, 30)` (~50 s patience, SSE status line per attempt) on top of
+  beefed-up in-call retries in `uscf_api._get` (waits 1 s/4 s; 429 added as retryable with
+  Retry-After honored). `ApiUnavailable` gained `retryable`/`not_found` flags: unknown member →
+  `PlayerNotFound` immediately; unusable member data → `UscfApiUnavailable` immediately; transient
+  errors retry then raise `UscfApiUnavailable` ("try again in a few minutes"). The HTML scraper is
+  fully intact but only reachable via the new `USCF_HTML_FALLBACK=1` env flag (emergency escape
+  hatch, documented as accepting pre-Nov-2025 data); `fallback_cb`/progress-page notice only fire on
+  that path. Worker catches `UscfApiUnavailable` and shows the message per player.
+- **Verified**: bogus ID 99999999 → PlayerNotFound in 0.2 s (no retry spinning); simulated hard
+  outage → 12 HTTP attempts across 4 rounds then the friendly error, with retry statuses streaming;
+  real scrape (Sevian 13493815) via the API in 9.5 s with data through Mar 2026; badges + suffixed
+  legends confirmed in Playwright. Docs: scraping.md gained a "USCF JSON API — the ONLY default
+  source" section (HTML sections re-titled LEGACY); CLAUDE.md header + config.py comments updated.

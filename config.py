@@ -45,3 +45,12 @@ CACHE_TTL_DAYS = _env_int("CACHE_TTL_DAYS", 7)
 # jump. Default on. Set USCF_INCLUDE_FOREIGN=0 to revert to the pre-2026-07
 # client (scraper/uscf_api_legacy.py). Read once at import (restart to change).
 USCF_INCLUDE_FOREIGN = _env_bool("USCF_INCLUDE_FOREIGN", True)
+
+# USCF scraper: the HTML fallback is DISABLED by default (2026-07, owner
+# decision). The legacy MSA pages it scrapes stopped updating around Nov 2025
+# (US Chess moved ratings to its new system), so any transient API blip used to
+# silently serve STALE data. The API path now retries with waits instead
+# (scraper.core.USCF_API_RETRY_WAITS) and raises a clear error if the API stays
+# down. Set USCF_HTML_FALLBACK=1 only as an emergency escape hatch — you're
+# explicitly accepting pre-Nov-2025 data. Read once at import.
+USCF_HTML_FALLBACK = _env_bool("USCF_HTML_FALLBACK", False)

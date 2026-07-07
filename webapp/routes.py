@@ -15,7 +15,7 @@ from scraper import (
     make_session, compute_record, fetch_history, fetch_fide_history,
     search_players, search_fide_players,
 )
-from scraper.core import NoClassicalTournaments, PlayerNotFound
+from scraper.core import NoClassicalTournaments, PlayerNotFound, UscfApiUnavailable
 from scraper.fide import (
     FIDE_TIMELINE_VERSION, FideNoRatedHistory, FidePlayerNotFound, FideScrapeError,
 )
@@ -139,7 +139,8 @@ def _safe_next(default):
 
 def _fetch_timeline(source, player_id, progress_cb=None, status_cb=None, fallback_cb=None):
     """Dispatch to the right scraper for a single player's RAW timeline.
-    `fallback_cb` only applies to USCF (fired when the API drops to HTML scraping)."""
+    `fallback_cb` only applies to USCF and only fires under the
+    USCF_HTML_FALLBACK=1 escape hatch (the API path never falls back)."""
     http = make_session()
     if source == "fide":
         # SQLite-backed OlimpBase + FIDE-archive caches so pre-2003 backfill
@@ -327,7 +328,7 @@ def scrape_stream():
                             "uscf_id": player_id,
                             "name": timeline.get("name"),
                         })
-                    except (PlayerNotFound, NoClassicalTournaments,
+                    except (PlayerNotFound, NoClassicalTournaments, UscfApiUnavailable,
                             FidePlayerNotFound, FideNoRatedHistory, FideScrapeError) as e:
                         q.put({
                             "type": "player_error",
