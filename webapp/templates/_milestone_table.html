@@ -1,5 +1,5 @@
 {% set show_age = player.dob is not none %}
-{% set show_score = true %}
+{% set show_score = player.source != 'fide' %}
 <section class="card">
   <h2>Milestone progression</h2>
   <table class="milestones">
@@ -34,6 +34,7 @@
     </tbody>
   </table>
   <p class="muted small">A dash means the player hasn't reached that milestone yet.
+    {% if not show_score %}Score % isn't available for FIDE sources.{% endif %}
     {% if not show_age %}Age is hidden because no birthday was entered (and the FIDE
     birth-year fallback is off or unavailable for this player).{% endif %}
     {% if show_age and player.dob_source == 'fide' %}Ages are approximate — derived from

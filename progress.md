@@ -78,7 +78,7 @@ Caruana's 2600/2800 climb into one 2014 jump.
 ## Known follow-ups
 - MSA / `player-search.php` endpoints will be retired for MUIR (`ratings.uschess.org`) — re-target
   the scraper + search when that happens.
-- Re-enable FIDE in the UI; pre-2003 FIDE backfill via OlimpBase (spec 005 Phase 6, deferred).
+- ~~Re-enable FIDE in the UI; pre-2003 FIDE backfill via OlimpBase~~ — done 2026-07-01, see below.
 - No rate-limiting on `/scrape` (IP-ban risk); no tests; no custom error pages.
 - Scraping is intentionally sequential — bulk (~100 players) is slow.
 - `webapp/templates/compare.html` is dead (deletable).
@@ -98,3 +98,93 @@ Condensed `CLAUDE.md`, `progress.md`, and `handoff.md` for brevity (docs only, n
   for now; featured players cache lazily when someone analyzes them, as before. Root cause of the
   prod hang still open (suspect the newer app deploy or Railway infra, not the cache code).
 - Local cache remains warmed (all 10 as clean API v2 entries) from `python -m webapp.warm` runs.
+
+## 2026-07-01 — FIDE first-class: per-row source, OlimpBase pre-2003 backfill, score % dropped
+FIDE went from "coming soon" to fully enabled (spec 005 Phase 6, reworked per owner decisions):
+- **Per-row source.** The site-wide source toggle is gone (`session["source"]` removed). Each form
+  row carries a USCF/FIDE radio pair (`source_N`); `parse_player_inputs(form)` validates per row and
+  dedupes on `(source, id)`, so one Analyze batch mixes sources. `pending_scrape.players` is now
+  `[[src, pid, dob], …]` (legacy batch shape tolerated across a deploy); `recent` entries snapshot
+  each row's own ladder; SSE `player_start`/`player_done` carry `source`; progress page shows
+  per-player badges and a "(N USCF · M FIDE)" header when mixed.
+- **Quick add both ways.** Each featured card has USCF + FIDE buttons (same DOB either way; the same
+  player can be added once per source). `presets.py` gained `fide_id` for all 10 players, verified
+  against FIDE search (exact b_year + GM + USA fed; e.g. Caruana 2020009, Nakamura 2016192,
+  Woodward 30953499 — FIDE lists Niemann as "Hans Moke", Shankland as "Sam").
+- **Two paste buttons.** "Paste a USCF list" / "Paste a FIDE list" share one bulk panel (per-source
+  labels + 8 vs 5–10 digit validation); Fill rows now **appends** into open rows with per-(source,id)
+  dedupe and the 100-cap counting existing rows, so a USCF list and a FIDE list can be combined.
+- **Score % dropped for FIDE** (owner decision — "not that important"): deleted
+  `get_fide_calculations`/`_parse_calculations` and the per-period calc loop; every FIDE event has
+  `score_numerator/score_games = None`, a FIDE scrape is ~2-3 requests. `_milestone_table.html`
+  hides the Score column for FIDE; analyze's score chart notes FIDE has no score data.
+- **Pre-2003 backfill (new `scraper/olimpbase.py`).** FIDE's `a_chart_data.phtml` floors at Apr 2003
+  for everyone; when a chart starts exactly at `2003-04-01`, `fetch_fide_history` fetches the
+  player's OlimpBase card (`/Elo/player/{L}/{Last},%20{First}.html`, ~10 KB, name from the FIDE
+  payload) and prepends Jan 1990–Oct 2001 rows with one continuous `cumulative_games`. Guards:
+  FIDE-ID identity check (homonyms), pre-1990 rows dropped (FIDE IDs exist from 1990; owner req.),
+  strictly best-effort (any failure → no backfill, never a scrape error), 1 s politeness gap,
+  results — negatives included — cached permanently in the new `olimpbase_cache` table
+  (`SqliteOlimpbaseCache` injected from routes; scraper stays Flask-free). Jan 2002–Jan 2003 has no
+  per-player source anywhere: accepted gap, milestones crossed in 2002 resolve to Apr 2003.
+- **Caveats in UI.** FIDE player page: no score %; list cadence (semiannual → quarterly → bimonthly →
+  monthly only since Aug 2012, linked to the chess.SE explainer); Jan-1990 floor; OlimpBase
+  attribution (Wojciech Bartelski) + 2002-gap note when pre-2003 data is shown. Index hero + a form
+  note mention both caveats.
+- **Versioning.** FIDE timelines carry `fide_timeline_version = 2`; `_timeline_outdated` re-scrapes
+  older cached FIDE timelines once (mirrors USCF `api_version`).
+- **Verified:** local parser vs saved cards (Kasparov: 20 pre-1990 rows dropped, 25 kept
+  1990-01→2001-10, old-scheme Jan-1990 ID handled); live Nakamura 2016192 → 9 pre-2003 events,
+  first period 1999-01-01 @ 2182, 2500 at 51 mo / age 15, games continuous across the gap; Mishra →
+  0 OlimpBase requests; Carlsen through the full webapp path → first period 2001-04-01 @ 2064 with
+  attribution + hidden Score column; mixed-batch POST /scrape + per-row validation errors + prefill
+  (22/22 test-client asserts); Playwright JS smoke (quick-add both sources, paste-append, row-toggle
+  clearing, reindexing, per-source submit errors). Docs: scraping.md FIDE/OlimpBase sections
+  rewritten; CLAUDE.md contract updated (FIDE score now None).
+- **Post-review fixes (same session):** an adversarial review pass found two real bugs, both fixed:
+  (1) `fetch_olimpbase_events` now returns `(events, definitive)` and `fetch_fide_history` only
+  caches DEFINITIVE results — a transient OlimpBase outage (network error/5xx/unparseable 200) is no
+  longer permanently cached as "no card", which would have silently masked a veteran's pre-2003
+  history forever; (2) `claimOpenRow` returns -1 at the 100-row cap instead of handing back row 100,
+  so quick-add/paste can no longer silently overwrite the last player ("The form is full" error).
+
+## 2026-07-07 — 2700chess verification: 2002 gap filled + floor fix; quick-add dropdowns
+Verified the FIDE scraper against 2700chess.com graphs for Carlsen, Anand, Sindarov, Niemann,
+Aronian (owner request; 2700chess = ground truth), then fixed everything fixable and reworked
+quick-add.
+- **Verification harness** (scratchpad): 2700chess embeds its full graph as `chartData` inside a
+  `window.__NEXT_SSG_SESSION__` JSON blob (curl_cffi Chrome impersonation gets past Cloudflare);
+  diffed per-period against `fetch_fide_history` from 1990 onward. Initial results: Anand + Aronian
+  perfect; Carlsen wrong at Apr 2003 (chart 2356 vs published 2315); all three veterans missing the
+  five Jan 2002 – Jan 2003 periods (2700chess has them); Sindarov ±1 in mid-2014 and Niemann's
+  2015 run (up to 37 pts) differ because FIDE retro-corrected — FIDE's own published lists
+  (downloaded `frl` zips) adjudicated every dispute: they match 2700chess except Niemann May 2026,
+  where OUR value (2742) matches the official list and 2700chess (2728) doesn't.
+- **New `scraper/fide_archive.py`.** FIDE's downloadable archive (`ratings.fide.com/download/`) has
+  the five quarterly lists inside the old "accepted gap" (jan02/apr02/jul02/oct02/jan03) plus apr03.
+  When a chart starts at the floor, the gap periods are backfilled from those lists and the archive's
+  Apr 2003 row overrides the chart's floor-row rating/games (fixes Carlsen's phantom 2356). Token-
+  based parser (layouts drift between lists), latin-1, best-effort everywhere; verified values match
+  2700chess exactly, incl. Aronian's absence from the Jul 2002 list.
+- **Per-LIST permanent cache**: new `fide_archive_lists` table (~245k rows for all six lists) via
+  `SqliteFideArchiveCache` injected from routes (scraper stays Flask-free); first veteran scrape
+  downloads ~6 MB once, every later one is a local lookup (Aronian re-scrape: 2.7 s). Transient
+  download/parse failures skip the list and cache nothing.
+- **`fide_timeline_version` → 3**; cached v2 FIDE timelines re-scrape once on next analyze.
+- **Post-fix diff vs 2700chess:** Carlsen 220/220 periods exact, Anand 244/244, Aronian 233/233,
+  Caruana 217/217 (one 5-pt 2006 retro-correction); remaining diffs are only FIDE's own post-2003
+  retro-corrections (documented in docs/scraping.md as accepted) — and the 2002 milestone collapse
+  is gone (Carlsen: 2100/2200/2300 now land in Jan 2002 / Jul 2002 / Apr 2003 instead of all Apr 2003).
+- **Quick-add reworked into two dropdown sections** (owner request): `FEATURED_FIDE` = the live FIDE
+  top 15 (scraped from FIDE's top list 2026-07-07: Carlsen, Caruana, Nakamura, Sindarov, Keymer,
+  Abdusattorov, So, Giri, Erigaisi, Wei Yi, Praggnanandhaa, Firouzja, Duda, Anand, Ding) and
+  `FEATURED_USCF` = the existing 10 American players. A card is ONE button; its source comes from
+  its section; the same player can sit in both sections with the same photo (Caruana, Nakamura).
+  13 new CC/CC0-licensed portraits fetched from Wikimedia Commons (license + author verified via the
+  Commons API; CREDITS.md + on-page credits updated, deduped for shared photos).
+- **Player-page note updated**: pre-2003 sourcing now credits OlimpBase (1990–2001) + FIDE's own
+  archive (2002–Apr 2003); the "milestones crossed in 2002 resolve to Apr 2003" caveat is gone.
+- **Verified end-to-end**: webapp scrape of Carlsen (v2 → outdated → re-scrape → v3 with 2002 rows +
+  2315 floor), Aronian cache-hit path, mixed Playwright batch (Carlsen FIDE + Caruana FIDE + Caruana
+  USCF via the new cards) through progress → analyze charts; duplicate-add guard; Caruana's fresh
+  FIDE timeline now starts Jan 2002 @ 2032 (age 9).

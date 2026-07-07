@@ -16,12 +16,17 @@ from scraper import (
     search_players, search_fide_players,
 )
 from scraper.core import NoClassicalTournaments, PlayerNotFound
-from scraper.fide import FideNoRatedHistory, FidePlayerNotFound, FideScrapeError
+from scraper.fide import (
+    FIDE_TIMELINE_VERSION, FideNoRatedHistory, FidePlayerNotFound, FideScrapeError,
+)
 from scraper.uscf_api import TIMELINE_API_VERSION
 
-from .cache import get_timeline, is_timeline_stale, save_timeline, SqliteCrosstableCache
+from .cache import (
+    get_timeline, is_timeline_stale, save_timeline,
+    SqliteCrosstableCache, SqliteFideArchiveCache, SqliteOlimpbaseCache,
+)
 from .forms import normalize_source, parse_milestones, parse_player_inputs
-from .presets import FEATURED_PLAYERS
+from .presets import FEATURED_FIDE, FEATURED_USCF, PHOTO_CREDITS
 
 bp = Blueprint("main", __name__)
 
@@ -32,11 +37,6 @@ VALID_SOURCES = ("uscf", "fide")
 # unreadable). Enforced server-side on the initial selection and client-side
 # on toggles in analyze.html.
 ANALYZE_CHART_LIMIT = 5
-
-
-def _active_source():
-    """The single, site-wide active source for this session."""
-    return normalize_source(session.get("source"))
 
 
 def _milestone_session_key(source):
@@ -142,15 +142,22 @@ def _fetch_timeline(source, player_id, progress_cb=None, status_cb=None, fallbac
     `fallback_cb` only applies to USCF (fired when the API drops to HTML scraping)."""
     http = make_session()
     if source == "fide":
-        return fetch_fide_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb)
+        # SQLite-backed OlimpBase + FIDE-archive caches so pre-2003 backfill
+        # sources are fetched once, ever.
+        return fetch_fide_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb,
+                                  olimpbase_cache=SqliteOlimpbaseCache(),
+                                  fide_archive_cache=SqliteFideArchiveCache())
     # SQLite-backed crosstable cache so foreign-event game counts are fetched once.
     return fetch_history(http, player_id, progress_cb=progress_cb, status_cb=status_cb,
                          fallback_cb=fallback_cb, crosstable_cache=SqliteCrosstableCache())
 
 
 def _timeline_outdated(source, timeline):
-    """A cached USCF timeline from before the foreign-event fix (or an older
-    timeline version) should be re-scraped even when it isn't time-stale."""
+    """A cached timeline written by an older scraper version should be re-scraped
+    even when it isn't time-stale: USCF timelines from before the foreign-event
+    fix, and FIDE timelines from before the OlimpBase backfill / score-% removal."""
+    if source == "fide":
+        return (timeline or {}).get("fide_timeline_version") != FIDE_TIMELINE_VERSION
     if source != "uscf" or not USCF_INCLUDE_FOREIGN:
         return False
     return (timeline or {}).get("api_version") != TIMELINE_API_VERSION
@@ -163,11 +170,9 @@ def _valid_source_or_404(source):
 
 @bp.route("/")
 def index():
-    # FIDE is temporarily disabled in the analyze UI ("coming soon"), so the form
-    # is USCF-only for now. (Existing FIDE entries in a user's library still render
-    # via their own per-entry source — this only pins the form + milestone view.)
-    source = "uscf"
-    session["source"] = source
+    # Source is chosen PER ROW in the form (each row is independently USCF or
+    # FIDE), so there's no site-wide source here. Prefill (from search.html's
+    # "Use as Player N" links) carries the id's source alongside it.
     prefill = {}
     pid = request.args.get("id", "").strip()
     slot = request.args.get("slot", "0").strip()
@@ -176,7 +181,10 @@ def index():
             slot_int = max(0, min(1, int(slot)))
         except ValueError:
             slot_int = 0
-        prefill[slot_int] = pid
+        prefill[slot_int] = {
+            "id": pid,
+            "source": normalize_source(request.args.get("source")),
+        }
     cached = _summaries(_saved())
     cached_ids = [f"{p['source']}:{p['player_id']}" for p in cached]
     return render_template(
@@ -185,59 +193,60 @@ def index():
         cached_ids=cached_ids,
         saved_count=len(cached),
         anon_limit=ANON_SAVE_LIMIT,
-        source=source,
-        milestones=_active_milestones(source),
         milestones_uscf=_active_milestones("uscf"),
         milestones_fide=_active_milestones("fide"),
         default_uscf=DEFAULT_USCF_MILESTONES,
         default_fide=DEFAULT_FIDE_MILESTONES,
         prefill=prefill,
-        featured_players=FEATURED_PLAYERS,
+        featured_fide=FEATURED_FIDE,
+        featured_uscf=FEATURED_USCF,
+        photo_credits=PHOTO_CREDITS,
     )
 
 
 @bp.route("/scrape", methods=["POST"])
 def scrape():
-    source = normalize_source(request.form.get("source"))
-    if source == "fide":
-        # FIDE is disabled in the UI for now; ignore any crafted fide submission.
-        flash("FIDE analysis is coming soon — analyzing with USCF for now.", "info")
-        source = "uscf"
-    session["source"] = source
-    entries, errors = parse_player_inputs(request.form, source)
+    # No batch-level source: every row carries its own (mixed batches are fine).
+    entries, errors = parse_player_inputs(request.form)
     for err in errors:
         flash(err, "error")
     if not entries:
         return redirect(url_for("main.index"))
-    milestones = _active_milestones(source)
     # pending_scrape only drives the network fetch (raw timeline), which is
-    # DOB/birth-year-independent — so it stays [pid, dob] and the worker is
-    # untouched. The per-player use_fide_birth flag is a *view* param and lives
-    # on the recent/saved entry that compute_record reads.
+    # DOB/birth-year-independent — so it stays [src, pid, dob] and the worker
+    # needs nothing else. The per-player use_fide_birth flag is a *view* param
+    # and lives on the recent/saved entry that compute_record reads.
     session["pending_scrape"] = {
-        "source": source,
-        "players": [[pid, dob] for pid, dob, _ufb in entries],
+        "players": [[src, pid, dob] for src, pid, dob, _ufb in entries],
     }
     # Remember this batch's view params so /analyze and /player can show the
-    # just-analyzed players (and offer to save them) before they're in the library.
+    # just-analyzed players (and offer to save them) before they're in the
+    # library. Milestones are snapshotted per row's OWN source ladder.
     session["recent"] = [
-        {"source": source, "player_id": pid, "dob": dob,
-         "use_fide_birth": ufb, "milestones": milestones}
-        for pid, dob, ufb in entries
+        {"source": src, "player_id": pid, "dob": dob,
+         "use_fide_birth": ufb, "milestones": _active_milestones(src)}
+        for src, pid, dob, ufb in entries
     ]
     return redirect(url_for("main.scrape_progress"))
 
 
-def _pending_entries():
-    raw = session.get("pending_scrape") or {}
-    source = normalize_source(raw.get("source"))
-    players = [(e[0], e[1]) for e in (raw.get("players") or [])]
-    return source, players
+def _pending_entries(raw):
+    """Per-player (source, player_id, dob) triples from a pending_scrape payload.
+    Tolerates the legacy batch shape {"source": ..., "players": [[pid, dob]]}
+    (a scrape pending across a deploy)."""
+    legacy_source = normalize_source(raw.get("source"))
+    players = []
+    for e in (raw.get("players") or []):
+        if len(e) >= 3:
+            players.append((normalize_source(e[0]), e[1], e[2]))
+        else:
+            players.append((legacy_source, e[0], e[1]))
+    return players
 
 
 @bp.route("/scrape/progress")
 def scrape_progress():
-    source, entries = _pending_entries()
+    entries = _pending_entries(session.get("pending_scrape") or {})
     if not entries:
         flash("Nothing to scrape. Submit the form again.", "error")
         return redirect(url_for("main.index"))
@@ -245,17 +254,16 @@ def scrape_progress():
     # for anyone already cached; brand-new players show "#<id>" until the scrape
     # resolves the name (the stream then fills it in).
     players = []
-    for pid, _dob in entries:
-        tl = get_timeline(source, pid)
-        players.append({"uscf_id": pid, "name": (tl or {}).get("name")})
-    return render_template("progress.html", players=players, source=source)
+    for src, pid, _dob in entries:
+        tl = get_timeline(src, pid)
+        players.append({"source": src, "uscf_id": pid, "name": (tl or {}).get("name")})
+    return render_template("progress.html", players=players)
 
 
 @bp.route("/scrape/stream")
 def scrape_stream():
     raw = session.pop("pending_scrape", None) or {}
-    source = normalize_source(raw.get("source"))
-    entries = [(e[0], e[1]) for e in (raw.get("players") or [])]
+    entries = _pending_entries(raw)
     if not entries:
         return Response("No pending scrape.", status=400)
     app = current_app._get_current_object()
@@ -267,7 +275,7 @@ def scrape_stream():
 
         def worker():
             with app.app_context():
-                for idx, (player_id, dob) in enumerate(entries):
+                for idx, (src, player_id, dob) in enumerate(entries):
                     def cb(current, total, _idx=idx):
                         q.put({
                             "type": "progress",
@@ -291,13 +299,14 @@ def scrape_stream():
                         # (spec 007 Part 7: only brand-new players trigger a
                         # scrape). A cache older than CACHE_TTL_DAYS is re-scraped
                         # here so new tournaments show up — the only re-scrape path.
-                        timeline = get_timeline(source, player_id)
+                        timeline = get_timeline(src, player_id)
                         cached_name = (timeline or {}).get("name")
                         q.put({"type": "player_start", "player_idx": idx,
-                               "uscf_id": player_id, "name": cached_name})
+                               "source": src, "uscf_id": player_id,
+                               "name": cached_name})
                         fresh = (timeline is not None
                                  and not is_timeline_stale(timeline, CACHE_TTL_DAYS)
-                                 and not _timeline_outdated(source, timeline))
+                                 and not _timeline_outdated(src, timeline))
                         if fresh:
                             # Already analyzed and fresh — no "X / Y tournaments"
                             # bar; the page just says so.
@@ -306,14 +315,15 @@ def scrape_stream():
                         else:
                             if timeline is not None:
                                 status_cb("Refreshing cached data — re-scraping for the latest ratings.")
-                            timeline = _fetch_timeline(source, player_id,
+                            timeline = _fetch_timeline(src, player_id,
                                                        progress_cb=cb, status_cb=status_cb,
                                                        fallback_cb=fallback_cb)
                             save_timeline(timeline)
-                        scraped_ids.append(f"{source}:{player_id}")
+                        scraped_ids.append(f"{src}:{player_id}")
                         q.put({
                             "type": "player_done",
                             "player_idx": idx,
+                            "source": src,
                             "uscf_id": player_id,
                             "name": timeline.get("name"),
                         })

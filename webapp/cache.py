@@ -58,6 +58,35 @@ CREATE TABLE IF NOT EXISTS crosstable_cache (
 )
 """
 
+# One FIDE player's OlimpBase backfill result (pre-2003 rating rows, floored at
+# Jan 1990 — see scraper/olimpbase.py). PERMANENT, no TTL anywhere: OlimpBase
+# is a frozen archive (lists end Oct 2001) and pre-2002 data is immutable.
+# Negative lookups (found=0, no card / identity guard failed) are cached too,
+# so a player without a card never triggers repeat OlimpBase requests.
+OLIMPBASE_CACHE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS olimpbase_cache (
+    fide_id TEXT PRIMARY KEY,
+    found INTEGER NOT NULL,
+    events TEXT NOT NULL,      -- JSON [{date, rating, period_games}, ...]
+    fetched_at TEXT NOT NULL
+)
+"""
+
+# One row per player per official FIDE archive rating list (Jan 2002 – Apr
+# 2003 — see scraper/fide_archive.py). Cached per LIST: the first veteran
+# FIDE scrape downloads a list once (~45k rows, ~1 MB zip) and stores it
+# whole; every later lookup is a local read. PERMANENT — the lists are
+# immutable historical publications.
+FIDE_ARCHIVE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS fide_archive_lists (
+    list_date TEXT NOT NULL,   -- the list's period date, e.g. "2002-01-01"
+    fide_id TEXT NOT NULL,
+    rating INTEGER NOT NULL,
+    games INTEGER NOT NULL,
+    PRIMARY KEY (list_date, fide_id)
+)
+"""
+
 
 def _db_path():
     return Path(current_app.instance_path) / "cache.sqlite3"
@@ -99,6 +128,8 @@ def init_db(app):
         conn.executescript(USERS_SCHEMA)
         conn.executescript(SAVED_ANALYSES_SCHEMA)
         conn.executescript(CROSSTABLE_CACHE_SCHEMA)
+        conn.executescript(OLIMPBASE_CACHE_SCHEMA)
+        conn.executescript(FIDE_ARCHIVE_SCHEMA)
     app.config["CACHE_WAS_RESET"] = reset
 
 
@@ -204,3 +235,90 @@ class SqliteCrosstableCache:
 
     def put(self, event_id, section_number, member_id, counts):
         save_crosstable_counts(event_id, section_number, member_id, counts)
+
+
+# ── OlimpBase pre-2003 backfill cache ───────────────────────────────────────────
+# Backs `SqliteOlimpbaseCache`, injected into `fetch_fide_history` so a FIDE
+# player's OlimpBase card (or its confirmed absence) is fetched once, ever.
+
+def get_olimpbase_events(fide_id):
+    db = get_db()
+    row = db.execute(
+        "SELECT found, events FROM olimpbase_cache WHERE fide_id = ?",
+        (str(fide_id),),
+    ).fetchone()
+    if row is None:
+        return None
+    return {"found": bool(row["found"]), "events": json.loads(row["events"])}
+
+
+def save_olimpbase_events(fide_id, payload):
+    db = get_db()
+    db.execute(
+        "INSERT INTO olimpbase_cache (fide_id, found, events, fetched_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(fide_id) DO UPDATE SET found=excluded.found, "
+        "events=excluded.events, fetched_at=excluded.fetched_at",
+        (
+            str(fide_id),
+            1 if payload.get("found") else 0,
+            json.dumps(payload.get("events") or []),
+            datetime.now(timezone.utc).isoformat(),
+        ),
+    )
+    db.commit()
+
+
+class SqliteOlimpbaseCache:
+    """get/put adapter for the FIDE scraper's OlimpBase backfill (same pattern
+    as SqliteCrosstableCache: the scraper stays Flask-agnostic and only sees
+    these two methods). Must be used inside an app context (the scrape worker
+    is). Entries are permanent — pre-2002 data is immutable, so no TTL."""
+
+    def get(self, fide_id):
+        return get_olimpbase_events(fide_id)
+
+    def put(self, fide_id, payload):
+        save_olimpbase_events(fide_id, payload)
+
+
+# ── FIDE archive rating-list cache (Jan 2002 – Apr 2003) ────────────────────────
+# Backs `SqliteFideArchiveCache`, injected into `fetch_fide_history` so each
+# official archive list is downloaded once, ever — then every veteran's gap
+# backfill is a local lookup.
+
+class SqliteFideArchiveCache:
+    """Per-list adapter for scraper/fide_archive.py (scraper stays Flask-
+    agnostic — it only sees these three methods). Must be used inside an app
+    context (the scrape worker is). Lists are immutable publications, so
+    entries are permanent — no TTL."""
+
+    def has_list(self, list_date):
+        db = get_db()
+        return db.execute(
+            "SELECT 1 FROM fide_archive_lists WHERE list_date = ? LIMIT 1",
+            (str(list_date),),
+        ).fetchone() is not None
+
+    def get_player(self, list_date, fide_id):
+        db = get_db()
+        row = db.execute(
+            "SELECT rating, games FROM fide_archive_lists "
+            "WHERE list_date = ? AND fide_id = ?",
+            (str(list_date), str(fide_id)),
+        ).fetchone()
+        if row is None:
+            return None
+        return {"rating": row["rating"], "games": row["games"]}
+
+    def put_list(self, list_date, players):
+        db = get_db()
+        db.executemany(
+            "INSERT OR REPLACE INTO fide_archive_lists "
+            "(list_date, fide_id, rating, games) VALUES (?, ?, ?, ?)",
+            [
+                (str(list_date), str(fid), int(p["rating"]), int(p["games"]))
+                for fid, p in players.items()
+            ],
+        )
+        db.commit()

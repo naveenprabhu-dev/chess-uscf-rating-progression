@@ -76,6 +76,7 @@
       <div class="chart-cell">
         <div class="chart-cell-head"><h3>Cumulative score % at rating</h3><button type="button" class="link-button save-chart" data-chart="score">Save</button></div>
         <div class="chart-wrap"><canvas id="chart-score"></canvas></div>
+        <p class="muted small chart-note" id="fide-score-note" hidden>FIDE analyses don't include score data.</p>
       </div>
     </div>
     <p class="muted small" id="no-selection-msg">Select one or more players to chart them. Gaps mean the player hasn't reached that milestone yet.</p>
@@ -216,9 +217,10 @@
     });
     enforceLimit();
     document.getElementById('no-selection-msg').hidden = keys.length > 0;
-    // Mixed-source banner from the live selection.
+    // Mixed-source banner + FIDE score caveat from the live selection.
     const sources = new Set(keys.map(k => k.split(':')[0]));
     document.getElementById('mixed-banner').hidden = sources.size <= 1;
+    document.getElementById('fide-score-note').hidden = !sources.has('fide');
     // CSV link reflects selection.
     updateCsvLink(keys);
   }

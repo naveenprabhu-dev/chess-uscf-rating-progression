@@ -459,7 +459,20 @@ table.search-results td.actions a {
 }
 .milestone-chips code { font-size: 0.72rem; padding: 0 0.25rem; }
 
+/* Mixed batches: BOTH ladders are always shown, each chip set labeled by source */
+.milestone-chip-group {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.milestone-chip-group .chip-src { font-weight: 600; }
+
 .milestone-panels { margin-top: 0.75rem; }
+.milestone-panel + .milestone-panel {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
 
 .milestone-form textarea { resize: vertical; min-height: 3rem; }
 
@@ -561,22 +574,20 @@ table.search-results td.actions a {
   gap: 0.35rem;
   cursor: pointer;
 }
-.source-option-disabled,
-.source-option-disabled input[type="radio"] {
-  cursor: not-allowed;
+
+/* ── Per-row source control (each player row is independently USCF or FIDE) ── */
+.row-source {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  margin: 0.15rem 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text);
 }
-.source-option-disabled { color: var(--muted); }
-.coming-soon-tag {
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 0.1rem 0.45rem;
-}
+.row-source .source-option { margin: 0; }
+
+/* Caveat note under the paste buttons (FIDE: no score %, coarse early periods) */
+.fide-form-note { margin: -0.5rem 0 1rem; }
 
 /* ── Bulk add (paste two lists: all IDs, all birthdays) ────────────────────── */
 .bulk-panel {
@@ -586,6 +597,7 @@ table.search-results td.actions a {
   margin-bottom: 1rem;
   background: var(--bg);
 }
+.bulk-head { margin-bottom: 0.5rem; }
 .bulk-cols {
   display: flex;
   gap: 1rem;
@@ -753,6 +765,23 @@ label.fide-birth-opt input[type="checkbox"] {
   grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
 }
 .featured-grid li { margin: 0; }
+/* The two quick-add dropdown sections (FIDE top 15 / American USCF stars) */
+.featured-section {
+  margin: 0 0 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+.featured-section > summary {
+  cursor: pointer;
+  padding: 0.55rem 0.8rem;
+  border-radius: 10px;
+}
+.featured-section > summary:hover { background: var(--bg); }
+.featured-section[open] > summary { border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; }
+.featured-section-label { font-weight: 600; }
+.featured-section > .featured-grid { padding: 0.7rem; }
+/* A whole card is ONE button: click = add as the section's source. */
 .preset-card {
   display: flex;
   flex-direction: column;
@@ -767,11 +796,29 @@ label.fide-birth-opt input[type="checkbox"] {
   color: var(--text);
   font: inherit;
   cursor: pointer;
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+  text-align: center;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 .preset-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
-.preset-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.preset-card:active { transform: translateY(1px); }
+.preset-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* The "+ USCF" / "+ FIDE" tag at the card bottom (visual affordance only —
+   the whole card is the button). */
+.preset-src {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 0.12rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--accent);
+  margin-top: auto;              /* pin to the card bottom so rows align */
+}
+.preset-card:hover .preset-src {
+  background: #f6efdd;
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
 .preset-photo {
   width: 64px;
   height: 64px;

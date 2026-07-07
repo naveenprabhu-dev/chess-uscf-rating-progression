@@ -4,7 +4,7 @@
 {% block content %}
 <section class="hero">
   <h1>Analyze chess players' Elo journey! </h1>
-  <p>For each rating milestone below, we compute <strong>games played</strong>, <strong>months taken</strong>, <strong>age at milestone</strong>, and <strong>cumulative score</strong>. For each player, enter a USCF ID or search by name and add a birthdate (optional), then press analyze.
+  <p>For each rating milestone below, we compute <strong>games played</strong>, <strong>months taken</strong>, <strong>age at milestone</strong>, and <strong>cumulative score</strong>. For each player, pick USCF or FIDE, enter an ID or search by name, and add a birthdate (optional), then press analyze — one batch can mix USCF and FIDE players freely.
      If DOB blank, we'll try to pull the birth year from FIDE, otherwise age stats are skipped.</p>
 
   <p>After analyzing, save data as a CSV for further analysis or compare the players you've analyzed with our graphs: great tool for understanding how long chess improvement takes!</p>
@@ -12,55 +12,67 @@
 
 <div class="card">
   <form method="POST" action="{{ url_for('main.scrape') }}" id="analyze-form" novalidate>
-    <fieldset class="source-toggle">
-      <legend>Rating source</legend>
-      <label class="source-option">
-        <input type="radio" name="source" value="uscf" checked>
-        USCF
-      </label>
-      <label class="source-option source-option-disabled" title="FIDE support is coming soon">
-        <input type="radio" name="source" value="fide" disabled>
-        FIDE <span class="coming-soon-tag">coming soon</span>
-      </label>
-      <span class="muted small">USCF only for now — FIDE support is on the way!</span>
-    </fieldset>
-
     <div class="count-control">
-      <button type="button" class="link-button" id="bulk-toggle-btn"
-              aria-expanded="false" aria-controls="bulk-panel">Paste a list</button>
-      <span class="muted small">Add players one at a time, or paste a whole list.</span>
+      <button type="button" class="link-button bulk-open-btn" id="bulk-uscf-btn" data-source="uscf"
+              aria-expanded="false" aria-controls="bulk-panel">Paste a USCF list</button>
+      <button type="button" class="link-button bulk-open-btn" id="bulk-fide-btn" data-source="fide"
+              aria-expanded="false" aria-controls="bulk-panel">Paste a FIDE list</button>
+      <span class="muted small">Add players one at a time, or paste whole lists — USCF and FIDE mix freely.</span>
     </div>
+    <p class="muted small fide-form-note">Heads up: FIDE analyses have no score % data, and FIDE
+       rating lists were not monthly before Aug 2012 — so FIDE "months to milestone" is coarser
+       for older periods.</p>
 
-    {# Featured players: one-click presets. Each carries a verified USCF ID + a
-       public birthdate; clicking drops the player into the next open row below
-       (see the addPreset() handler in the script). #}
-    {% if featured_players %}
+    {# Quick add: one-click presets in two dropdown sections — the FIDE top 15
+       (added as FIDE analyses) and top American players (added as USCF ones).
+       A card is ONE button: clicking it drops that player + birthdate into the
+       next open row below as the SECTION's source (see addPreset() in the
+       script). The same player can appear in both sections — same picture,
+       different ID — and be added once per source (two separate analyses). #}
+    {% if featured_fide or featured_uscf %}
     <div class="featured" id="featured">
       <div class="featured-head">
         <span class="featured-title">Quick add</span>
-        <span class="muted small">Click a player to add them (birthdate included) to the form below.</span>
+        <span class="muted small">Click a player (birthdate included) to add them to the form below.</span>
       </div>
-      <ul class="featured-grid">
-        {% for fp in featured_players %}
-        <li>
-          <button type="button" class="preset-card"
-                  data-uscf-id="{{ fp.uscf_id }}"
-                  data-dob="{{ fp.dob }}"
-                  data-name="{{ fp.name }}"
-                  title="Add {{ fp.name }} — USCF #{{ fp.uscf_id }}, born {{ fp.dob }}">
-            <img class="preset-photo" loading="lazy" width="64" height="64"
-                 src="{{ url_for('static', filename='players/' ~ fp.photo) }}"
-                 alt="Portrait of {{ fp.name }}">
-            <span class="preset-name">{{ fp.name }}</span>
-          </button>
-        </li>
-        {% endfor %}
-      </ul>
+      {% for section in [
+           {"key": "fide", "label": "FIDE top 15", "players": featured_fide,
+            "blurb": "the current world top 15 — added as FIDE analyses"},
+           {"key": "uscf", "label": "American stars", "players": featured_uscf,
+            "blurb": "US-raised players with deep USCF histories — added as USCF analyses"},
+         ] %}
+      {% if section.players %}
+      <details class="featured-section" id="featured-{{ section.key }}" {% if loop.first %}open{% endif %}>
+        <summary>
+          <span class="featured-section-label">{{ section.label }}</span>
+          <span class="muted small">— {{ section.blurb }}</span>
+        </summary>
+        <ul class="featured-grid" data-source="{{ section.key }}">
+          {% for fp in section.players %}
+          {% set pid = fp.fide_id if section.key == 'fide' else fp.uscf_id %}
+          <li>
+            <button type="button" class="preset-card"
+                    data-id="{{ pid }}"
+                    data-dob="{{ fp.dob }}"
+                    data-name="{{ fp.name }}"
+                    title="Add {{ fp.name }} as a {{ section.key|upper }} analysis — {{ section.key|upper }} #{{ pid }}, born {{ fp.dob }}">
+              <img class="preset-photo" loading="lazy" width="64" height="64"
+                   src="{{ url_for('static', filename='players/' ~ fp.photo) }}"
+                   alt="Portrait of {{ fp.name }}">
+              <span class="preset-name">{{ fp.name }}</span>
+              <span class="preset-src">+ {{ section.key|upper }}</span>
+            </button>
+          </li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      {% endfor %}
       <span class="field-hint preset-status" id="preset-status" aria-live="polite"></span>
       <details class="photo-credits">
         <summary>Photo credits</summary>
         <ul class="muted small">
-          {% for fp in featured_players %}
+          {% for fp in photo_credits %}
           <li>{{ fp.name }} — photo by {{ fp.photo_by }}, {{ fp.photo_license }},
             <a href="{{ fp.photo_source }}" target="_blank" rel="noopener noreferrer">via Wikimedia Commons</a> (resized).</li>
           {% endfor %}
@@ -70,10 +82,13 @@
     {% endif %}
 
     {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
-       then "Fill rows" pairs them by position and populates the rows below. #}
+       then "Fill rows" pairs them by position and APPENDS them into the first
+       open rows below, tagged with the panel's source (so a USCF list and a
+       FIDE list can be pasted back-to-back into one mixed batch). #}
     <div class="bulk-panel" id="bulk-panel" hidden>
+      <div class="bulk-head"><strong id="bulk-heading">Paste a USCF list</strong></div>
       <div class="bulk-cols">
-        <label class="bulk-col" for="bulk-ids">USCF IDs
+        <label class="bulk-col" for="bulk-ids"><span id="bulk-ids-label">USCF IDs</span>
           <span class="muted small">— one per line (or comma/space separated)</span>
           <textarea id="bulk-ids" rows="6" spellcheck="false"
             placeholder="12345678&#10;87654321&#10;13572468"></textarea>
@@ -87,7 +102,8 @@
       <p class="muted small">
         Birthdays are matched to IDs <strong>by position</strong>: the 1st birthday pairs with the
         1st ID, and so on. Birthdays are optional, but any you include must be MM/DD/YYYY.
-        This replaces the rows below.
+        These players are <strong>added</strong> to the rows below — anything already entered stays,
+        so you can paste a USCF list and then a FIDE list.
       </p>
       <div class="bulk-actions">
         <button type="button" class="primary" id="bulk-fill-btn">Fill rows</button>
@@ -96,16 +112,28 @@
       </div>
     </div>
 
-    {# Template row cloned by JS. __IDX__ is replaced with the 0-based index. #}
+    {# Template row cloned by JS. __IDX__ is replaced with the 0-based index.
+       Each row carries its OWN source (USCF/FIDE radio pair), and the hidden ID
+       field keeps the historical name uscf_id_N for either source. #}
     <template id="player-row-template">
       <fieldset class="player-row">
         <legend>Player <span class="row-number">__NUM__</span></legend>
+        <div class="row-source" role="radiogroup" aria-label="Rating source">
+          <label class="source-option">
+            <input type="radio" name="source___IDX__" value="uscf" checked>
+            USCF
+          </label>
+          <label class="source-option">
+            <input type="radio" name="source___IDX__" value="fide">
+            FIDE
+          </label>
+        </div>
         <input type="hidden" name="uscf_id___IDX__" id="uscf_id___IDX__" value="">
         <label>
-          <span class="id-label">{{ 'FIDE ID' if source == 'fide' else 'USCF ID' }} or name</span>
+          <span class="id-label">USCF ID or name</span>
           <div class="search-wrap">
             <input type="text" class="player-search-input" id="player_search___IDX__"
-                   placeholder="{{ 'Search name or enter FIDE ID' if source == 'fide' else 'Search name or enter USCF ID' }}"
+                   placeholder="Search name or enter USCF ID"
                    data-slot="__IDX__" autocomplete="off" role="combobox"
                    aria-expanded="false" aria-autocomplete="list"
                    aria-controls="search-dropdown___IDX__"
@@ -145,20 +173,25 @@
     <button type="submit" class="primary">Analyze</button>
   </form>
 
-  {# Milestone editor lives outside the analyze <form> so the two never nest #}
+  {# Milestone editor lives outside the analyze <form> so the two never nest.
+     Batches can mix sources, so BOTH ladders are always shown (no swapping). #}
   <details class="milestone-editor" id="milestone-editor">
     <summary>
-      <span class="me-label">Active <span id="milestone-source-label">{{ source|upper }}</span> milestones</span>
-      <span id="milestone-display-uscf" class="milestone-chips"{{ ' hidden' if source == 'fide' else '' }}>
-        {% for m in milestones_uscf %}<code>{{ m }}</code>{% endfor %}
+      <span class="me-label">Active milestones</span>
+      <span class="milestone-chip-group"><span class="chip-src">USCF</span>
+        <span id="milestone-display-uscf" class="milestone-chips">
+          {%- for m in milestones_uscf %}<code>{{ m }}</code>{% endfor -%}
+        </span>
       </span>
-      <span id="milestone-display-fide" class="milestone-chips"{{ ' hidden' if source != 'fide' else '' }}>
-        {% for m in milestones_fide %}<code>{{ m }}</code>{% endfor %}
+      <span class="milestone-chip-group"><span class="chip-src">FIDE</span>
+        <span id="milestone-display-fide" class="milestone-chips">
+          {%- for m in milestones_fide %}<code>{{ m }}</code>{% endfor -%}
+        </span>
       </span>
       <span class="me-edit muted small">edit</span>
     </summary>
     <div class="milestone-panels">
-      <div class="milestone-panel" id="milestone-panel-uscf"{{ ' hidden' if source == 'fide' else '' }}>
+      <div class="milestone-panel" id="milestone-panel-uscf">
         <form class="milestone-form" data-which="uscf" action="{{ url_for('main.settings') }}" method="POST">
           <input type="hidden" name="which" value="uscf">
           <input type="hidden" name="next" value="/">
@@ -173,7 +206,7 @@
           <p class="muted small">Default: 400 – 3000 by 200s</p>
         </form>
       </div>
-      <div class="milestone-panel" id="milestone-panel-fide"{{ ' hidden' if source != 'fide' else '' }}>
+      <div class="milestone-panel" id="milestone-panel-fide">
         <form class="milestone-form" data-which="fide" action="{{ url_for('main.settings') }}" method="POST">
           <input type="hidden" name="which" value="fide">
           <input type="hidden" name="next" value="/">
@@ -256,10 +289,20 @@
 {% endif %}
 
 <script>
-// ── Source toggle ─────────────────────────────────────────────────────────────
-function activeSource() {
-  const el = document.querySelector('input[name="source"]:checked');
+// ── Per-row source (each player row is independently USCF or FIDE) ────────────
+function rowSource(slot) {
+  const el = document.querySelector(`input[name="source_${slot}"]:checked`);
   return el ? el.value : 'uscf';
+}
+
+function sourceIdLabel(src) { return src === 'fide' ? 'FIDE ID' : 'USCF ID'; }
+
+function validIdFor(src, id) {
+  return src === 'fide' ? /^\d{5,10}$/.test(id) : /^\d{8}$/.test(id);
+}
+
+function idFormatHint(src) {
+  return src === 'fide' ? 'FIDE IDs are 5–10 digits.' : 'USCF IDs are exactly 8 digits.';
 }
 
 function setHint(slot, msg, isError) {
@@ -269,29 +312,27 @@ function setHint(slot, msg, isError) {
   hint.classList.toggle('hint-error', !!isError);
 }
 
-function applySource(src) {
+// Point a row at a source: check its radio and retitle the label/placeholder.
+// `clear` empties the row's search input, hidden ID, and hint — an ID resolved
+// against one source is invalid for the other, so toggling always clears.
+function setRowSource(slot, src, clear) {
+  const radio = document.querySelector(`input[name="source_${slot}"][value="${src}"]`);
+  if (!radio) return;
+  radio.checked = true;
+  const row = radio.closest('.player-row');
   const fide = src === 'fide';
-  document.querySelectorAll('.id-label').forEach(el => {
-    el.textContent = (fide ? 'FIDE ID' : 'USCF ID') + ' or name';
-  });
-  document.querySelectorAll('.player-search-input').forEach(el => {
-    el.placeholder = fide ? 'Search name or enter FIDE ID' : 'Search name or enter USCF ID';
-    el.value = '';
-  });
-  document.querySelectorAll('input[id^="uscf_id_"]').forEach(el => { el.value = ''; });
-  document.querySelectorAll('.search-dropdown').forEach(dd => { dd.hidden = true; });
-  document.querySelectorAll('.field-hint').forEach(h => { h.textContent = ''; h.classList.remove('hint-error'); });
-  // Swap the milestone display + editor panel
-  document.getElementById('milestone-source-label').textContent = fide ? 'FIDE' : 'USCF';
-  document.getElementById('milestone-display-uscf').hidden = fide;
-  document.getElementById('milestone-display-fide').hidden = !fide;
-  document.getElementById('milestone-panel-uscf').hidden = fide;
-  document.getElementById('milestone-panel-fide').hidden = !fide;
+  row.querySelector('.id-label').textContent = sourceIdLabel(src) + ' or name';
+  const search = row.querySelector('.player-search-input');
+  search.placeholder = fide ? 'Search name or enter FIDE ID' : 'Search name or enter USCF ID';
+  if (clear) {
+    search.value = '';
+    search.setAttribute('aria-expanded', 'false');
+    const hidden = document.getElementById(`uscf_id_${slot}`);
+    if (hidden) hidden.value = '';
+    row.querySelector('.search-dropdown').hidden = true;
+    setHint(slot, '', false);
+  }
 }
-
-document.querySelectorAll('input[name="source"]').forEach(r => {
-  r.addEventListener('change', () => applySource(activeSource()));
-});
 
 // ── Dynamic player rows (count-first, shown PAGE_SIZE at a time) ──────────────
 const rowsContainer = document.getElementById('player-rows');
@@ -313,6 +354,9 @@ function makeRow(idx) {
 function reindexRows() {
   rowsContainer.querySelectorAll('.player-row').forEach((row, i) => {
     row.querySelector('.row-number').textContent = i + 1;
+    row.querySelectorAll('.row-source input[type="radio"]').forEach(r => {
+      r.name = `source_${i}`;
+    });
     const hidden = row.querySelector('input[type="hidden"]');
     hidden.name = `uscf_id_${i}`;
     hidden.id = `uscf_id_${i}`;
@@ -391,6 +435,15 @@ rowsContainer.addEventListener('click', e => {
 document.getElementById('prev-page-btn').addEventListener('click', () => goToPage(currentPage - 1));
 document.getElementById('next-page-btn').addEventListener('click', () => goToPage(currentPage + 1));
 
+// Toggling a row's USCF/FIDE control retitles + clears THAT row only.
+rowsContainer.addEventListener('change', e => {
+  const radio = e.target.closest('.row-source input[type="radio"]');
+  if (!radio) return;
+  const row = radio.closest('.player-row');
+  const slot = Number(row.querySelector('.player-search-input').dataset.slot);
+  setRowSource(slot, radio.value, true);
+});
+
 // DOB fields: clear the red flag while editing, re-validate (and flag the future) on blur.
 rowsContainer.addEventListener('input', e => {
   const dob = e.target.closest('input[name^="dob_"]');
@@ -452,10 +505,11 @@ function tokenizeList(text) {
   return text.split(/[\s,]+/).map(t => t.trim()).filter(Boolean);
 }
 
-// Pair the two lists by position. Malformed IDs/birthdays are hard errors (block
-// the fill). A count mismatch is a WARNING that names the unpaired entries but
-// still fills what it can: extra IDs get no birthday; extra birthdays are dropped.
-function parseBulkTwo(idText, dobText) {
+// Pair the two lists by position, validating IDs against the panel's source.
+// Malformed IDs/birthdays are hard errors (block the fill). A count mismatch is
+// a WARNING that names the unpaired entries but still fills what it can: extra
+// IDs get no birthday; extra birthdays are dropped.
+function parseBulkTwo(idText, dobText, src) {
   const idToks = tokenizeList(idText);
   const dobToks = tokenizeList(dobText);
   const errors = [];
@@ -463,7 +517,11 @@ function parseBulkTwo(idText, dobText) {
 
   idToks.forEach((t, i) => {
     if (!/^\d+$/.test(t)) errors.push(`ID #${i + 1} ("${t}") isn't a number.`);
-    else if (t.length !== 8) errors.push(`ID #${i + 1} ("${t}") isn't a valid 8-digit USCF ID.`);
+    else if (!validIdFor(src, t)) {
+      errors.push(src === 'fide'
+        ? `ID #${i + 1} ("${t}") isn't a valid FIDE ID (5–10 digits).`
+        : `ID #${i + 1} ("${t}") isn't a valid 8-digit USCF ID.`);
+    }
   });
 
   const dobs = dobToks.map((t, i) => {
@@ -473,7 +531,7 @@ function parseBulkTwo(idText, dobText) {
     return norm;
   });
 
-  if (idToks.length === 0) errors.push('Enter at least one USCF ID.');
+  if (idToks.length === 0) errors.push(`Enter at least one ${sourceIdLabel(src)}.`);
 
   // Birthdays are optional, so an empty birthday box is fine. Only warn when both
   // lists have entries but the counts differ — and say exactly who is unpaired.
@@ -493,37 +551,102 @@ function parseBulkTwo(idText, dobText) {
   return { players, errors, warnings };
 }
 
-function fillRows(players) {
-  setRowCount(players.length);
-  players.forEach((p, i) => {
-    const search = document.getElementById(`player_search_${i}`);
+// True if some row already holds this exact (source, id) pair — the same person
+// may appear once per source (USCF and FIDE are separate analyses).
+function alreadyAdded(src, id) {
+  return Array.from(rowsContainer.querySelectorAll('.player-search-input')).some(inp => {
+    const slot = inp.dataset.slot;
+    const hidden = document.getElementById(`uscf_id_${slot}`);
+    return hidden && hidden.value.trim() === String(id) && rowSource(slot) === src;
+  });
+}
+
+// Rows already carrying a player (visible name or resolved ID) — counted toward
+// the 100-player cap when a pasted list is appended.
+function filledRowCount() {
+  let n = 0;
+  rowsContainer.querySelectorAll('.player-search-input').forEach(inp => {
+    const hidden = document.getElementById(`uscf_id_${inp.dataset.slot}`);
+    if (inp.value.trim() || (hidden && hidden.value.trim())) n++;
+  });
+  return n;
+}
+
+// Index of the first empty row, growing the form by one when every row is taken.
+// Returns -1 when the form is already at the 100-row cap with no empty row —
+// setRowCount clamps at 100, so "growing" would hand back an OCCUPIED row and
+// the caller would silently overwrite its player.
+function claimOpenRow() {
+  const searches = rowsContainer.querySelectorAll('.player-search-input');
+  for (let i = 0; i < searches.length; i++) {
     const hidden = document.getElementById(`uscf_id_${i}`);
-    const dob = document.querySelector(`[name="dob_${i}"]`);
+    if (!searches[i].value.trim() && !(hidden && hidden.value.trim())) return i;
+  }
+  if (rowCount() >= 100) return -1;
+  setRowCount(rowCount() + 1);
+  return rowCount() - 1;
+}
+
+// APPEND the pasted players into the first open rows as `src` (existing rows are
+// untouched, so back-to-back USCF + FIDE pastes build one mixed batch).
+function fillRows(players, src) {
+  let firstIdx = null;
+  for (const p of players) {
+    const idx = claimOpenRow();
+    if (idx === -1) break;   // at the cap (guarded upstream too) — never overwrite
+    if (firstIdx === null) firstIdx = idx;
+    setRowSource(idx, src, false);
+    const search = document.getElementById(`player_search_${idx}`);
+    const hidden = document.getElementById(`uscf_id_${idx}`);
+    const dob = document.querySelector(`[name="dob_${idx}"]`);
     if (search) search.value = p.id;
     if (hidden) hidden.value = p.id;
-    if (dob) dob.value = p.dob || '';
-    setHint(i, `Entered #${p.id}`, false);
-  });
-  goToPage(0);                                 // show the first page after a fill
+    if (dob) { dob.value = p.dob || ''; clearDobError(dob); }
+    setHint(idx, `Entered #${p.id}`, false);
+  }
+  if (firstIdx !== null) goToPage(pageOf(firstIdx));   // reveal the first appended row
 }
 
 const bulkPanel = document.getElementById('bulk-panel');
-const bulkToggle = document.getElementById('bulk-toggle-btn');
 const bulkStatus = document.getElementById('bulk-status');
+let bulkSource = 'uscf';
 
-function openBulk(open) {
+function configureBulk(src) {
+  bulkSource = src;
+  const fide = src === 'fide';
+  document.getElementById('bulk-heading').textContent = fide ? 'Paste a FIDE list' : 'Paste a USCF list';
+  document.getElementById('bulk-ids-label').textContent = fide ? 'FIDE IDs' : 'USCF IDs';
+  document.getElementById('bulk-ids').placeholder = fide
+    ? '1503014\n2016192\n2020009'
+    : '12345678\n87654321\n13572468';
+  bulkStatus.textContent = '';
+  bulkStatus.classList.remove('hint-error', 'hint-warning');
+}
+
+function openBulk(open, src) {
+  if (open && src) configureBulk(src);
   bulkPanel.hidden = !open;
-  bulkToggle.setAttribute('aria-expanded', String(open));
+  document.querySelectorAll('.bulk-open-btn').forEach(b => {
+    b.setAttribute('aria-expanded', String(open && b.dataset.source === bulkSource));
+  });
   if (open) document.getElementById('bulk-ids').focus();
 }
 
-bulkToggle.addEventListener('click', () => openBulk(bulkPanel.hidden));
+document.querySelectorAll('.bulk-open-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const src = btn.dataset.source;
+    if (!bulkPanel.hidden && bulkSource === src) { openBulk(false); return; }
+    openBulk(true, src);
+  });
+});
 document.getElementById('bulk-cancel-btn').addEventListener('click', () => openBulk(false));
 
 document.getElementById('bulk-fill-btn').addEventListener('click', () => {
+  const src = bulkSource;
   const { players, errors, warnings } = parseBulkTwo(
     document.getElementById('bulk-ids').value,
     document.getElementById('bulk-dobs').value,
+    src,
   );
   bulkStatus.classList.remove('hint-error', 'hint-warning');
   if (errors.length) {
@@ -534,19 +657,31 @@ document.getElementById('bulk-fill-btn').addEventListener('click', () => {
     return;
   }
   if (!players.length) {
-    bulkStatus.textContent = 'No USCF IDs found. Enter at least one.';
+    bulkStatus.textContent = `No ${sourceIdLabel(src)}s found. Enter at least one.`;
     bulkStatus.classList.add('hint-error');
     return;
   }
-  if (players.length > 100) {
-    bulkStatus.textContent = `Too many players (${players.length}). The maximum is 100.`;
+  // Skip anything the form already holds as the same (source, id).
+  const fresh = players.filter(p => !alreadyAdded(src, p.id));
+  const dupCount = players.length - fresh.length;
+  if (dupCount) {
+    warnings.push(`Skipped ${dupCount} ${src.toUpperCase()} ID${dupCount === 1 ? '' : 's'} already in the form.`);
+  }
+  if (!fresh.length) {
+    bulkStatus.textContent = 'Every pasted player is already in the form.';
+    bulkStatus.classList.add('hint-warning');
+    return;
+  }
+  const total = filledRowCount() + fresh.length;
+  if (total > 100) {
+    bulkStatus.textContent = `Too many players (${total} total, including rows already filled). The maximum is 100.`;
     bulkStatus.classList.add('hint-error');
     return;
   }
-  fillRows(players);
+  fillRows(fresh, src);
   if (warnings.length) {
-    // Rows are filled, but the counts didn't match — keep the panel open with the
-    // warning so the user sees exactly which entries were left unpaired.
+    // Rows are filled, but something was unpaired/skipped — keep the panel open
+    // with the warning so the user sees exactly what happened.
     bulkStatus.textContent = warnings.join(' ');
     bulkStatus.classList.add('hint-warning');
   } else {
@@ -555,37 +690,31 @@ document.getElementById('bulk-fill-btn').addEventListener('click', () => {
   }
 });
 
-// ── Featured players: one-click add (appends into the next open row) ──────────
-// Each card carries a verified USCF ID + a public birthdate. We drop the player
-// into the first empty row (or a fresh one), putting the name in the visible
-// field and the ID in the hidden field — exactly like picking from search — so
-// the submit validator sees a resolved ID. Repeated clicks accumulate players.
-function firstOpenRowIndex() {
-  const searches = rowsContainer.querySelectorAll('.player-search-input');
-  for (let i = 0; i < searches.length; i++) {
-    const hidden = document.getElementById(`uscf_id_${i}`);
-    if (!searches[i].value.trim() && !(hidden && hidden.value.trim())) return i;
-  }
-  return -1;
-}
-
-function presetAlreadyAdded(id) {
-  return Array.from(rowsContainer.querySelectorAll('input[id^="uscf_id_"]'))
-    .some(h => h.value.trim() === id);
-}
-
-function addPreset(id, dob, name) {
+// ── Quick add: one-click card (appends into the next open row) ────────────────
+// Each card is a single button carrying one ID + a public birthdate; its source
+// comes from the section it sits in (the FIDE top-15 or USCF dropdown).
+// Clicking drops the player into the first empty row (or a fresh one) as that
+// source, putting the name in the visible field and the ID in the hidden field
+// — exactly like picking from search — so the submit validator sees a resolved
+// ID. Repeated clicks accumulate players; the same player can be added once
+// per source (two separate analyses).
+function addPreset(src, id, dob, name) {
   const status = document.getElementById('preset-status');
   if (status) { status.textContent = ''; status.classList.remove('hint-error', 'hint-warning'); }
-  if (presetAlreadyAdded(id)) {
-    if (status) { status.textContent = `${name} is already in the list.`; status.classList.add('hint-warning'); }
+  if (!id) {
+    if (status) { status.textContent = `No ${src.toUpperCase()} ID on file for ${name}.`; status.classList.add('hint-warning'); }
     return;
   }
-  let idx = firstOpenRowIndex();
-  if (idx === -1) {                       // no empty row — grow by one
-    setRowCount(rowCount() + 1);
-    idx = rowCount() - 1;
+  if (alreadyAdded(src, id)) {
+    if (status) { status.textContent = `${name} (${src.toUpperCase()}) is already in the list.`; status.classList.add('hint-warning'); }
+    return;
   }
+  const idx = claimOpenRow();
+  if (idx === -1) {
+    if (status) { status.textContent = 'The form is full — 100 players max.'; status.classList.add('hint-error'); }
+    return;
+  }
+  setRowSource(idx, src, false);
   const search = document.getElementById(`player_search_${idx}`);
   const hidden = document.getElementById(`uscf_id_${idx}`);
   const dobEl = document.querySelector(`[name="dob_${idx}"]`);
@@ -594,11 +723,14 @@ function addPreset(id, dob, name) {
   if (dobEl) { dobEl.value = dob || ''; clearDobError(dobEl); }
   setHint(idx, `Added #${id}`, false);
   goToPage(pageOf(idx));                   // reveal the row we just filled
-  if (status) status.textContent = `Added ${name}.`;
+  if (status) status.textContent = `Added ${name} (${src.toUpperCase()}).`;
 }
 
-document.querySelectorAll('.preset-card').forEach(btn => {
-  btn.addEventListener('click', () => addPreset(btn.dataset.uscfId, btn.dataset.dob, btn.dataset.name));
+document.querySelectorAll('.featured-grid .preset-card').forEach(card => {
+  card.addEventListener('click', () => {
+    const src = card.closest('.featured-grid').dataset.source;
+    addPreset(src, card.dataset.id, card.dataset.dob, card.dataset.name);
+  });
 });
 
 // ── Live player search (event-delegated so dynamic rows work) ─────────────────
@@ -655,7 +787,7 @@ async function runSearch(slot) {
   input.setAttribute('aria-expanded', 'true');
   dropdown.innerHTML = '<p class="muted small search-hint">Searching…</p>';
 
-  const src = activeSource();
+  const src = rowSource(slot);            // THIS row's source picks the directory
   try {
     const resp = await fetch(`/api/search?source=${src}&q=${encodeURIComponent(q)}`);
     if (mySeq !== _seq[slot]) return;   // a newer search superseded this one
@@ -751,10 +883,11 @@ document.addEventListener('click', e => {
   });
 });
 
-// Validate on submit: EVERY row must have a USCF ID — an empty row must be filled
+// Validate on submit: EVERY row must have an ID — an empty row must be filled
 // or removed (we don't silently skip it). A typed name must resolve to a selected
-// ID, and birthdays must be valid + not in the future. A failing row may be on a
-// hidden page, so jump to the first one so the user can see the note.
+// ID, numeric IDs must match the ROW's source format (USCF exactly 8 digits,
+// FIDE 5–10), and birthdays must be valid + not in the future. A failing row may
+// be on a hidden page, so jump to the first one so the user can see the note.
 document.getElementById('analyze-form').addEventListener('submit', e => {
   let ok = true, firstErrorSlot = null;
   const noteError = slot => {
@@ -767,20 +900,36 @@ document.getElementById('analyze-form').addEventListener('submit', e => {
 
   inputs.forEach(input => {
     const slot = input.dataset.slot;
+    const src = rowSource(slot);
+    const label = sourceIdLabel(src);
     const hidden = document.getElementById(`uscf_id_${slot}`);
     const raw = input.value.trim();
     if (!raw) {
       // Unpopulated row: force the user to fill it or remove it before analyzing.
       noteError(slot);
       setHint(slot, filledCount === 0
-        ? 'Enter a USCF ID to analyze.'
-        : 'Empty row — enter a USCF ID, or click Remove if not adding another player.', true);
+        ? `Enter a ${label} to analyze.`
+        : `Empty row — enter a ${label}, or click Remove if not adding another player.`, true);
       return;
     }
-    if (isNumeric(raw)) { hidden.value = raw; return; }
+    if (isNumeric(raw)) {
+      if (!validIdFor(src, raw)) {
+        noteError(slot);
+        setHint(slot, idFormatHint(src), true);
+        return;
+      }
+      hidden.value = raw;
+      return;
+    }
     if (!hidden.value) {
       noteError(slot);
       setHint(slot, 'Pick a player from the suggestions, or enter a numeric ID.', true);
+      return;
+    }
+    // A resolved ID (from search/quick add) must still fit the row's source.
+    if (!validIdFor(src, hidden.value.trim())) {
+      noteError(slot);
+      setHint(slot, idFormatHint(src), true);
     }
   });
   // Reject malformed or future birthdays (the field is flagged red by validateDobField).
@@ -803,16 +952,18 @@ document.getElementById('analyze-form').addEventListener('keydown', e => {
   }
 });
 
-// Render the initial rows (respect any prefill passed from a "Use as player" link).
+// Render the initial rows (respect any prefill passed from a "Use as player"
+// link — each prefill entry carries its own {id, source}).
 (function initRows() {
   const prefill = {{ prefill|tojson }};
   const prefillIdxs = Object.keys(prefill).map(Number);
   const maxPrefill = prefillIdxs.length ? Math.max(...prefillIdxs) + 1 : 0;
   setRowCount(Math.max(2, maxPrefill));
-  for (const [idx, pid] of Object.entries(prefill)) {
+  for (const [idx, p] of Object.entries(prefill)) {
+    setRowSource(Number(idx), p.source || 'uscf', false);
     const search = document.getElementById(`player_search_${idx}`);
     const hidden = document.getElementById(`uscf_id_${idx}`);
-    if (search && hidden) { search.value = pid; hidden.value = pid; }
+    if (search && hidden) { search.value = p.id; hidden.value = p.id; }
   }
 })();
 

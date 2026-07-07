@@ -36,9 +36,21 @@
 
   {% if player.source == 'fide' %}
     <p class="muted small note-fide">FIDE rating history starts at the first published rating,
-       not the first event. Periods were quarterly through 2011, monthly since 2013 — so
-       "months to milestone" is bucketed to ±3 months for older periods. Cumulative score %
-       is reconstructed from FIDE's per-period calculation pages.</p>
+       not the first event — and no earlier than Jan 1990, when FIDE IDs were introduced.
+       Score % isn't available for FIDE analyses. FIDE rating lists were also
+       <a href="https://chess.stackexchange.com/questions/25348/how-has-the-frequency-of-fide-rating-lists-changed-over-the-years"
+          target="_blank" rel="noopener noreferrer">not published monthly</a> until Aug 2012:
+       they came out twice a year through 1999, quarterly from 2000 to mid-2009, then every
+       two months through mid-2012 — so "months to milestone" is coarse for older periods.</p>
+    {% if player.first_tournament_date < '2003-04-01' %}
+      <p class="muted small note-fide">Ratings before Apr 2003 come from the official FIDE
+         rating lists: Jan 1990 – Oct 2001 via
+         <a href="https://www.olimpbase.org/Elo/summary.html" target="_blank"
+            rel="noopener noreferrer">OlimpBase (Wojciech Bartelski)</a>'s per-player archive,
+         and Jan 2002 – Apr 2003 straight from FIDE's own
+         <a href="https://ratings.fide.com/download_lists.phtml" target="_blank"
+            rel="noopener noreferrer">downloadable list archive</a>.</p>
+    {% endif %}
   {% endif %}
 
   {% set this_next = '/player/' ~ player.source ~ '/' ~ player.player_id %}

@@ -10,10 +10,11 @@ python run.py                          # http://localhost:5050  (:5000 = macOS A
 ```
 If `python` isn't found, the interpreter is `/opt/anaconda3/envs/uscf-scraper/bin/python`.
 
-## Current state (2026-07-01)
-Flask app: single/bulk USCF player analysis, milestone config per source, a multi-player charts page
-(`/analyze`), CSV export, and featured-player quick-add presets. FIDE is fully implemented but
-**disabled in the analyze UI** ("coming soon"). Deployed on Railway at **elojourney.com** (Volume at
+## Current state (2026-07-07)
+Flask app: single/bulk player analysis with **per-row USCF/FIDE source** (one batch can mix both),
+milestone config per source, a multi-player charts page (`/analyze`), CSV export, and quick-add
+presets in **two dropdown sections** (FIDE top 15 / American USCF stars — a card is one button, the
+same player can sit in both sections). Deployed on Railway at **elojourney.com** (Volume at
 `/app/instance` persists the cache).
 
 **Architecture (spec 007, Phases 0 & 1):** the SQLite `scrape_cache` holds a **raw,
@@ -24,19 +25,44 @@ user's own **library** (`session["saved"]`, cap 5 per browser) ∪ their most-re
 timelines auto-re-scrape once past `CACHE_TTL_DAYS` (7) on analyze — the only re-scrape path (manual
 refresh is gone). Firebase Phases 2–4 (login, 100-cap, anon→uid) are not done.
 
-## Most recent session — 2026-07-01: USCF foreign-event fix
-A player's no-affiliate FIDE/foreign events carry a Regular (`ratingSource == "R"`) record and move
-the US Chess rating, but the old `RatingSource="R"` request dropped them (their section system is
-`G`/`A`/`F`) — collapsing Caruana's 2600/2800 into one 2014 jump. Fix:
-- `scraper/uscf_api.py` (rewritten) pulls all sections, keeps any with an `R` record; foreign events'
-  W/D/L come from the event crosstable `/standings` endpoint, memoized in a new `crosstable_cache`
-  table (`SqliteCrosstableCache` injected from routes, so the scraper stays Flask-free).
-- Timeline carries `api_version = 2`; the worker re-scrapes any cached USCF timeline lacking it.
-- Revert with `USCF_INCLUDE_FOREIGN=0` (→ verbatim `scraper/uscf_api_legacy.py`).
-- Result: Caruana 741 events (was 560); 2600 → Jan 2008, 2800 → Jun 2011. First scrape ~30 s
-  (crosstable calls), cached re-scrape ~7 s. **Never re-add the Regular filter.**
+## Most recent session — 2026-07-07: 2700chess verification → 2002 gap filled + quick-add dropdowns
+Verified the FIDE scraper per-period against 2700chess.com (owner request, ground truth) for
+Carlsen, Anand, Sindarov, Niemann, Aronian; fixed what was fixable; reworked quick-add.
+- **New `scraper/fide_archive.py`:** the old "accepted" Jan 2002 – Jan 2003 gap is now FILLED from
+  FIDE's own downloadable archive lists (jan02–jan03 frl zips), and the archive's Apr 2003 list
+  **overrides the chart's floor row**, which sometimes carries a later FIDE recalculation (Carlsen:
+  chart said 2356; the published list and 2700chess say 2315). Lists cached permanently per LIST in
+  the new `fide_archive_lists` table (`SqliteFideArchiveCache`, ~245k rows, one-time ~6 MB download
+  on the first veteran scrape). Best-effort like OlimpBase; never cache a failed/partial list.
+- **`fide_timeline_version` → 3** — cached v2 FIDE timelines re-scrape once on next analyze.
+- **Result:** Carlsen/Anand/Aronian/Caruana now match 2700chess exactly on every common period from
+  1990 on. Remaining diffs are FIDE's own post-2003 retro-corrections served by their chart endpoint
+  (Sindarov ±1 in 2014, Niemann's corrected 2015 run) — rare, small, documented in docs/scraping.md;
+  for Niemann May 2026 we match FIDE's official list and 2700chess doesn't.
+- **Quick-add = two dropdown sections** (`presets.py`): `FEATURED_FIDE` — the live FIDE top 15 as of
+  2026-07-07 — and `FEATURED_USCF` — the 10 American players. One button per card, source from the
+  section, same photo when a player is in both (Caruana, Nakamura). 13 new CC/CC0 portraits from
+  Wikimedia Commons (licenses verified via API; CREDITS.md + on-page credits updated).
+
+## Previous session — 2026-07-01 (later): FIDE first-class + OlimpBase pre-2003 backfill
+FIDE went from "coming soon" to fully enabled (spec 005 Phase 6 landed, reworked per owner):
+- **Per-row source:** the analyze form's USCF/FIDE choice is per row (`source_N`), so one batch mixes
+  sources; "Paste a list" is two buttons (USCF / FIDE list) whose fills **append** rather than replace.
+- **Score % dropped for FIDE** (owner decision): no more per-period `a_indv_calculation.php` calls; a
+  FIDE scrape is ~2-3 requests. FIDE `score_pct` is always None; the Score column hides for FIDE.
+- **Pre-2003 backfill:** FIDE's chart JSON floors at Apr 2003, so charts starting exactly there
+  backfill Jan 1990–Oct 2001 from OlimpBase per-player cards (`scraper/olimpbase.py`, name-keyed +
+  FIDE-ID identity guard, best-effort). Cached permanently — negatives included — in the
+  `olimpbase_cache` table (list-cadence caveat on the player page; monthly lists only since Aug 2012).
+- Verified end-to-end: Nakamura's FIDE timeline reaches back to Jan 1999 (2500 at age 15), Carlsen's
+  to Apr 2001 @ 2064 through the full webapp path; Kasparov's pre-1990 rows correctly dropped;
+  mixed-batch scrape + per-row validation + quick-add/paste JS all pass (test client + Playwright).
 
 ## Recent history (brief)
+- **2026-07-01:** USCF foreign-event fix — `scraper/uscf_api.py` pulls all sections, keeps any with
+  an `R` record; foreign W/D/L from event crosstables, memoized in `crosstable_cache`. Timeline
+  `api_version = 2` re-scrapes old caches. Revert: `USCF_INCLUDE_FOREIGN=0`. Caruana: 2600 → Jan
+  2008, 2800 → Jun 2011. **Never re-add the Regular filter.**
 - **2026-07-01:** attempted to pre-populate the Railway cache for the 10 quick-add players (boot
   warm → bundled seed); prod started hanging (Railway edge → container 499s), so **reverted all of
   it** — no cache-warming on Railway now; featured players cache lazily on first analyze. Prod-hang
@@ -61,6 +87,8 @@ Regular-rating filter** (drops foreign events).
 
 ## Known follow-ups
 - MSA endpoints → MUIR (`ratings.uschess.org`) migration pending; re-target scraper + search.
-- Re-enable FIDE in the UI; pre-2003 FIDE backfill via OlimpBase (spec 005 Phase 6, deferred).
 - No `/scrape` rate-limiting (IP-ban risk); no tests / custom error pages.
 - `webapp/templates/compare.html` is unused (deletable).
+- Prod deploy of the 2026-07-01 + 2026-07-07 changes pending (pushed to main; Railway deploys from
+  it). First FIDE veteran scrape in prod will download the six archive lists (~6 MB, one time) into
+  the Volume-backed cache.

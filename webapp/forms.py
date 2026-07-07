@@ -51,18 +51,24 @@ def validate_dob(raw, required=False):
     return s, None
 
 
-def parse_player_inputs(form, source):
-    """Parse an arbitrary number of (uscf_id_N, dob_N, use_fide_birth_N) rows from
-    a form, validating IDs against the site-wide `source`.
+def parse_player_inputs(form):
+    """Parse an arbitrary number of (source_N, uscf_id_N, dob_N, use_fide_birth_N)
+    rows from a form. Each row carries its OWN source radio (`source_N`), so one
+    batch can freely mix USCF and FIDE players; IDs are validated against that
+    row's source.
+
+    NOTE: the ID field is named ``uscf_id_N`` for BOTH sources — the name is
+    historical (it predates FIDE support) and renaming it across the JS + server
+    isn't worth the churn. It holds whichever source's ID the row is set to.
 
     Returns (entries, errors). Empty rows are skipped. Each entry is
-    (player_id, dob_or_None, use_fide_birth) — DOB is optional. `use_fide_birth`
-    is True when the row's checkbox is checked (the form default) and False when
-    the user unchecked it; an HTML checkbox only submits a value when checked, so
-    absence == unchecked == False. It decides whether a player with no user-typed
-    DOB falls back to the FIDE birth year for age stats (False -> no age stats).
+    (source, player_id, dob_or_None, use_fide_birth) — DOB is optional.
+    `use_fide_birth` is True when the row's checkbox is checked (the form
+    default) and False when the user unchecked it; an HTML checkbox only submits
+    a value when checked, so absence == unchecked == False. It decides whether a
+    player with no user-typed DOB falls back to the FIDE birth year for age
+    stats (False -> no age stats).
     """
-    label = "FIDE ID" if source == "fide" else "USCF ID"
     entries = []
     errors = []
     # Collect every submitted row index from the form keys so we don't assume a
@@ -82,6 +88,7 @@ def parse_player_inputs(form, source):
         raw_dob = form.get(f"dob_{i}", "").strip()
         if not raw_id and not raw_dob:
             continue
+        source = normalize_source(form.get(f"source_{i}"))
         use_fide_birth = form.get(f"use_fide_birth_{i}") is not None
         player_id, id_err = validate_player_id(raw_id, source)
         dob, dob_err = validate_dob(raw_dob)
@@ -90,18 +97,20 @@ def parse_player_inputs(form, source):
         if dob_err:
             errors.append(f"Row {i + 1}: {dob_err}")
         if player_id and not id_err and not dob_err:
-            entries.append((player_id, dob, use_fide_birth))
+            entries.append((source, player_id, dob, use_fide_birth))
 
     if not entries and not errors:
-        errors.append(f"Enter at least one {label}.")
+        errors.append("Enter at least one USCF or FIDE ID.")
 
+    # Dedupe per (source, id): the same person may legitimately appear twice —
+    # once as a USCF analysis and once as a FIDE analysis.
     seen = set()
     deduped = []
-    for player_id, dob, use_fide_birth in entries:
-        if player_id in seen:
+    for source, player_id, dob, use_fide_birth in entries:
+        if (source, player_id) in seen:
             continue
-        seen.add(player_id)
-        deduped.append((player_id, dob, use_fide_birth))
+        seen.add((source, player_id))
+        deduped.append((source, player_id, dob, use_fide_birth))
 
     return deduped, errors
 

@@ -1,10 +1,25 @@
 """FIDE scraper — second source alongside USCF.
 
 See specs/005-fide-source/plan.md and research.md. Rating history comes from a
-single JSON endpoint (`a_chart_data.phtml`). Per-period W/D/L (for the
-cumulative score %) comes from `a_indv_calculation.php`, one call per rated
-period the player competed in. Plain `requests` plus the XHR/Referer headers —
-no Cloudflare handling needed for FIDE.
+single JSON endpoint (`a_chart_data.phtml`). Plain `requests` plus the
+XHR/Referer headers — no Cloudflare handling needed for FIDE.
+
+Score % was DROPPED for FIDE by design (2026-07): the per-period
+`a_indv_calculation.php` calls (one per rated period) made veteran scrapes
+slow and fragile for a single table column. Every FIDE timeline event now
+carries `score_numerator: None, score_games: None`, so `compute_record`
+degrades `score_pct` to None per-cell, and a FIDE scrape is ~2-3 requests
+total.
+
+Pre-2003 history: `a_chart_data.phtml` has a hard server-side floor of Apr
+2003 for every player. When a player's earliest rated period is exactly that
+floor, `fetch_fide_history` backfills Jan 1990 – Oct 2001 from OlimpBase's
+per-player rating cards (see scraper/olimpbase.py) and Jan 2002 – Jan 2003
+from FIDE's own downloadable archive rating lists (see scraper/fide_archive.py)
+— both best-effort and cached permanently. The archive's Apr 2003 list also
+overrides the chart's floor-row rating, which sometimes carries a later FIDE
+recalculation instead of the published value (Carlsen: chart 2356 vs published
+2315; found by diffing against 2700chess.com, 2026-07).
 
 Framework-agnostic: no Flask imports here.
 """
@@ -14,9 +29,23 @@ from datetime import datetime, timezone
 import requests
 from bs4 import BeautifulSoup
 
+from scraper.fide_archive import lookup_archive_ratings
+from scraper.olimpbase import fetch_olimpbase_events
+
 FIDE_BASE = "https://ratings.fide.com"
 FIDE_INTER_REQUEST_DELAY_SECONDS = 1.0
 FIDE_TIMEOUT_SECONDS = 20
+
+# Bump when the FIDE timeline shape/semantics change so the scrape worker can
+# re-scrape stale cached timelines (mirrors uscf_api.TIMELINE_API_VERSION).
+# v2 (2026-07): score fields dropped by design; OlimpBase pre-2003 backfill.
+# v3 (2026-07): Jan 2002 – Jan 2003 gap filled + Apr 2003 floor row corrected
+#               from FIDE's official archive rating lists (fide_archive.py).
+FIDE_TIMELINE_VERSION = 3
+
+# a_chart_data.phtml never returns periods before Apr 2003, for any player.
+# A history that starts exactly here may be truncated -> try the backfill.
+FIDE_CHART_FLOOR = "2003-04-01"
 
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -89,68 +118,6 @@ def get_fide_history(session, fide_id):
     raise FideScrapeError("FIDE rate-limited — try again in a minute")
 
 
-def _parse_calculations(html):
-    """Sum (score, games) across the per-tournament summary rows of a
-    calculations fragment.
-
-    `a_indv_calculation.php` returns one <table> per tournament played in the
-    period. Each table has a header row, a summary row, and per-opponent detail
-    rows. The summary row's first cell is the average-opponent rating (an
-    integer, e.g. "2304"); detail rows start with an opponent name. We only sum
-    summary rows to avoid double-counting. Columns: Rc, Ro, _, _, _, w, n, ...
-    where `w` is the score (wins + 0.5*draws) and `n` the game count.
-    """
-    soup = BeautifulSoup(html, "lxml")
-    total_w = 0.0
-    total_n = 0
-    for table in soup.find_all("table"):
-        for tr in table.find_all("tr"):
-            cells = [c.get_text(strip=True) for c in tr.find_all("td")]
-            if len(cells) < 7 or not cells[0].isdigit():
-                continue  # header rows have no <td>; detail rows lead with a name
-            try:
-                total_w += float(cells[5])
-                total_n += int(cells[6])
-            except (ValueError, IndexError):
-                continue
-    return total_w, total_n
-
-
-def get_fide_calculations(session, fide_id, period):
-    """GET /a_indv_calculation.php for one rating period; return (score, games).
-
-    `period` is `YYYY-MM-01`. `t=0` selects standard (classical). Returns a
-    (total_score, total_games) tuple where total_score already folds draws in as
-    0.5 (FIDE's `w` column). Raises FideScrapeError on HTTP errors or a
-    persistently empty body, so the caller can decide score is incomplete.
-    """
-    fide_id = str(fide_id)
-    url = f"{FIDE_BASE}/a_indv_calculation.php"
-    params = {"id_number": fide_id, "rating_period": period, "t": "0"}
-    headers = _fide_headers(f"{FIDE_BASE}/calculations.phtml?id_number={fide_id}")
-
-    last_exc = None
-    for attempt in range(2):
-        try:
-            response = session.get(url, params=params, headers=headers, timeout=FIDE_TIMEOUT_SECONDS)
-        except requests.RequestException as e:
-            last_exc = e
-            time.sleep(FIDE_INTER_REQUEST_DELAY_SECONDS)
-            continue
-        if response.status_code != 200:
-            raise FideScrapeError(
-                f"FIDE calc returned HTTP {response.status_code} for {fide_id} {period}."
-            )
-        if not (response.content or b"").strip():
-            time.sleep(FIDE_INTER_REQUEST_DELAY_SECONDS)
-            continue
-        return _parse_calculations(response.text)
-
-    if last_exc is not None:
-        raise FideScrapeError(f"FIDE calc request failed: {last_exc}")
-    raise FideScrapeError("FIDE calc rate-limited — empty response")
-
-
 def search_fide_players(session, query, limit=20):
     """GET /incl_search_l.php?search=<q>; parse <table id="table_results">.
 
@@ -202,22 +169,50 @@ def _period_date(date_2):
     return datetime.strptime(date_2, "%Y-%b").strftime("%Y-%m-01")
 
 
-def fetch_fide_history(session, fide_id, progress_cb=None, status_cb=None):
+def fetch_fide_history(session, fide_id, progress_cb=None, status_cb=None,
+                       olimpbase_cache=None, fide_archive_cache=None):
     """Fetch a FIDE player's raw rating timeline (spec 007 Part 3b).
 
-    Returns the cacheable, DOB/milestone-independent timeline. Cumulative score
-    data is reconstructed from per-period W/D/L via `get_fide_calculations` (one
-    call per rated period the player competed in). Unlike the old milestone-aware
-    scraper, this fetches *all* rated periods (no milestone-based early exit) so
-    the cached timeline can be re-derived for any ladder. If a period's calc
-    can't be fetched, `score_games` is None for that and every later event, so
-    `compute_record` degrades score to None per-cell from that point on.
-    `progress_cb` fires once per rated period processed.
+    Returns the cacheable, DOB/milestone-independent timeline: ~2-3 requests
+    (profile B-Year + chart JSON, occasionally one OlimpBase card). Every event
+    carries `score_numerator: None, score_games: None` — FIDE score % was
+    dropped by design (2026-07, see module docstring), so `compute_record`
+    yields `score_pct: None` for every FIDE milestone.
+
+    Pre-2003 backfill: FIDE's chart data is floored at Apr 2003 server-side.
+    If the earliest rated period is exactly "2003-04-01" (i.e. the player MAY
+    have older history), we backfill from two sources (both best-effort — a
+    miss never breaks the scrape) and prepend those events, with
+    `cumulative_games` running continuously across the whole merged sequence:
+
+    * Jan 1990 – Oct 2001 from the player's OlimpBase card;
+    * Jan 2002 – Jan 2003 from FIDE's official archive rating lists
+      (scraper/fide_archive.py), whose Apr 2003 list also overrides the
+      chart's floor-row rating when it disagrees (the chart sometimes serves
+      a later FIDE recalculation there instead of the published value).
+
+    `first_tournament_date` / `initial_rating` then come from the merged first
+    event. `olimpbase_cache` is an optional `.get(fide_id)`/`.put(fide_id,
+    payload)` adapter (payload `{"found": bool, "events": [...]}`) injected by
+    the web layer (mirrors the crosstable-cache pattern; keeps this module
+    Flask-free); hits — including negative ones — skip the OlimpBase request
+    entirely, and pre-2002 data is immutable so entries never expire.
+    `fide_archive_cache` is the analogous per-LIST adapter (`.has_list` /
+    `.get_player` / `.put_list`) for the archive lists — each ~45k-player list
+    is fetched once ever, then every later veteran scrape is free.
+
+    Without the old per-period calc loop there is no long phase to report, so
+    `progress_cb` just fires (0, 1) at the start and (1, 1) at the end to keep
+    the SSE progress UI fed. The timeline carries
+    `fide_timeline_version: FIDE_TIMELINE_VERSION` so the scrape worker can
+    detect and re-scrape pre-v2 cached timelines.
     """
     fide_id = str(fide_id)
 
     if status_cb:
         status_cb("Querying FIDE…")
+    if progress_cb:
+        progress_cb(0, 1)
 
     # FIDE birth year is player-specific, so it's cacheable on the timeline and
     # applied as a DOB fallback by compute_record.
@@ -252,65 +247,109 @@ def fetch_fide_history(session, fide_id, progress_cb=None, status_cb=None):
     periods.sort(key=lambda p: p[0])
 
     first_period = periods[0]
-    first_tournament_date = first_period[0]
-    initial_rating = first_period[1]
     name = first_period[3].get("name") or fide_id
     country = first_period[3].get("country")
 
-    active_total = sum(1 for p in periods if p[2] > 0)
-    if progress_cb:
-        progress_cb(0, active_total or 1)
+    # ── Pre-2003 backfill (OlimpBase + FIDE archive lists) ─────────────────
+    # "2003-04-01" as the earliest period is FIDE's server-side floor, so the
+    # player MAY have older history; any later start means they simply began
+    # after the floor and no lookup is needed.
+    olimp_events = []
+    archive_rows = {}
+    if first_period[0] == FIDE_CHART_FLOOR:
+        cached = olimpbase_cache.get(fide_id) if olimpbase_cache is not None else None
+        if cached is not None:
+            # Cache hit — positive or negative — costs zero OlimpBase requests.
+            olimp_events = (cached.get("events") or []) if cached.get("found") else []
+        else:
+            if status_cb:
+                status_cb("Checking OlimpBase for pre-2003 history…")
+            time.sleep(1.0)  # politeness gap after the FIDE calls
+            fetched, definitive = fetch_olimpbase_events(session, fide_id, name)
+            if olimpbase_cache is not None and definitive:
+                # DEFINITIVE results are cached forever — negatives (found=0)
+                # included, so card-less players never trigger repeat OlimpBase
+                # hits. Transient failures (network blip, 5xx) are NOT cached:
+                # the no-TTL negative cache would otherwise permanently mask a
+                # veteran's pre-2003 history; instead the next TTL re-scrape
+                # simply retries the card.
+                olimpbase_cache.put(
+                    fide_id, {"found": fetched is not None, "events": fetched or []}
+                )
+            olimp_events = fetched or []
 
+        # OlimpBase ends at the Oct 2001 list; FIDE's own archive lists cover
+        # Jan 2002 – Apr 2003 (best-effort; cached per LIST, so only the first
+        # veteran scrape ever downloads them).
+        archive_rows = lookup_archive_ratings(
+            session, fide_id, archive_cache=fide_archive_cache, status_cb=status_cb
+        )
+
+    # The archive's Apr 2003 row corrects the chart's floor row (rating AND
+    # games): the chart sometimes serves a later recalculation there that
+    # never appeared on a published list. The rest fill the 2002 gap.
+    floor_fix = archive_rows.pop(FIDE_CHART_FLOOR, None)
+    gap_events = [
+        {"date": d, "rating": row["rating"], "period_games": row["games"]}
+        for d, row in sorted(archive_rows.items())
+    ]
+
+    # Merge: OlimpBase events (all <= Oct 2001) then archive gap rows (2002 –
+    # Jan 2003) are strictly older than the FIDE chart periods — prepend, with
+    # ONE cumulative_games running total across the whole sequence. The sort +
+    # date guard are belt-and-braces against a malformed cached payload ever
+    # overlapping the FIDE range.
     cumulative_games = 0
-    cum_score = 0.0          # running sum of FIDE `w` (wins + 0.5*draws)
-    cum_score_games = 0      # running sum of FIDE `n` (games) from calc pages
-    score_complete = True    # flips False if a period's calc can't be fetched
-    processed = 0
     events = []
+    for oev in sorted(olimp_events + gap_events, key=lambda e: e["date"]):
+        if oev["date"] >= first_period[0]:
+            continue
+        cumulative_games += int(oev.get("period_games") or 0)
+        events.append({
+            "date": oev["date"],
+            "cumulative_games": cumulative_games,
+            "rating": int(oev["rating"]),
+            "score_numerator": None,
+            "score_games": None,
+        })
     for pdate, prating, pgames, _entry in periods:
+        if floor_fix is not None and pdate == FIDE_CHART_FLOOR:
+            prating, pgames = int(floor_fix["rating"]), int(floor_fix["games"])
         cumulative_games += pgames
-        if pgames > 0:
-            if score_complete:
-                try:
-                    period_w, period_n = get_fide_calculations(session, fide_id, pdate)
-                    cum_score += period_w
-                    cum_score_games += period_n
-                except FideScrapeError:
-                    score_complete = False
-            processed += 1
-            if progress_cb:
-                progress_cb(processed, active_total or 1)
         events.append({
             "date": pdate,
             "cumulative_games": cumulative_games,
             "rating": prating,
-            "score_numerator": cum_score if score_complete else None,
-            "score_games": cum_score_games if (score_complete and cum_score_games > 0) else None,
+            "score_numerator": None,
+            "score_games": None,
         })
 
     if progress_cb:
-        progress_cb(active_total or 1, active_total or 1)
+        progress_cb(1, 1)
 
     return {
         "source": "fide",
         "player_id": fide_id,
         "name": name,
         "country": country,
-        "first_tournament_date": first_tournament_date,
-        "initial_rating": int(initial_rating),
+        "first_tournament_date": events[0]["date"],
+        "initial_rating": int(events[0]["rating"]),
         "fide_birth_year": fide_birth_year,
         "events": events,
+        "fide_timeline_version": FIDE_TIMELINE_VERSION,
         "scraped_at": datetime.now(timezone.utc).isoformat(),
     }
 
 
 def scrape_fide_player(session, fide_id, dob=None, milestones=None, progress_cb=None,
-                       status_cb=None, use_fide_birth_year=True):
+                       status_cb=None, use_fide_birth_year=True, olimpbase_cache=None,
+                       fide_archive_cache=None):
     """Back-compat wrapper: fetch the raw FIDE timeline and compute the public
     record for this DOB + milestone ladder. Returns the canonical dict shape."""
     from scraper.core import compute_record
     timeline = fetch_fide_history(
         session, fide_id, progress_cb=progress_cb, status_cb=status_cb,
+        olimpbase_cache=olimpbase_cache, fide_archive_cache=fide_archive_cache,
     )
     return compute_record(timeline, dob=dob, milestones=milestones,
                           use_fide_birth_year=use_fide_birth_year)
