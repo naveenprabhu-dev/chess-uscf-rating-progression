@@ -49,6 +49,17 @@ def create_app():
     init_db(app)
     app.teardown_appcontext(close_db)
 
+    # Cache-bust the stylesheet: ?v=<styles.css mtime>, computed once at boot.
+    # Every deploy rewrites the file (fresh mtime), so browsers re-fetch the CSS
+    # exactly when it changes instead of serving a stale cached copy — without
+    # this, a redeployed page can render with the previous deploy's styles.
+    css = os.path.join(app.static_folder, "styles.css")
+    css_version = int(os.path.getmtime(css)) if os.path.exists(css) else 0
+
+    @app.context_processor
+    def _asset_version():
+        return {"css_version": css_version}
+
     @app.before_request
     def _flash_cache_reset():
         # init_db sets CACHE_WAS_RESET when it drops a legacy (uscf_id-keyed)

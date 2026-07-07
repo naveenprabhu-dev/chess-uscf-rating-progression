@@ -238,3 +238,17 @@ quick-add.
   after the library section, guarded by `{% if photo_credits %}`.
 - Verified in Playwright (fresh session): badges render yellow/blue, cards' badges align per row,
   photo credits render last in the DOM (line 590, after the milestone editor).
+
+## 2026-07-07 (follow-up) — force two-line names + CSS cache-busting (owner screenshot)
+- Owner's live-site screenshot showed the min-height approach wasn't what was wanted (and the
+  deployed page was rendering with the previous deploy's stylesheet): short names ("Ray Robson",
+  "Wesley So") stayed on ONE centered line. Now the template **splits every name into two stacked
+  lines** — `fp.name.rsplit(' ', 1)` → `.preset-name-line` spans (first name(s) / surname), e.g.
+  "Ray" / "Robson" — with `.preset-name` switched to `flex-direction: column`. min-height 2.3em kept
+  only as a guard for a hypothetical one-word name. Badges align on every card; verified in
+  Playwright at 1900px with both sections open. (Duda's hyphenated "Jan-Krzysztof" can wrap to a 3rd
+  line in narrow cards; his badge stays aligned because `.preset-badge` is bottom-pinned.)
+- **CSS cache-busting**: `base.html` now links `styles.css?v={{ css_version }}`, a context-processor
+  global set in `create_app` to the file's mtime at boot. Every deploy rewrites the file → fresh
+  mtime → browsers re-fetch, so a redeployed page can no longer render with stale cached CSS (the
+  root cause of "localhost looks different than the committed site").

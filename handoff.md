@@ -14,10 +14,11 @@ If `python` isn't found, the interpreter is `/opt/anaconda3/envs/uscf-scraper/bi
 Flask app: single/bulk player analysis with **per-row USCF/FIDE source** (one batch can mix both),
 milestone config per source, a multi-player charts page (`/analyze`), CSV export, and quick-add
 presets in **two dropdown sections** whose headers are the **yellow/blue source badge** ("FIDE" /
-"USCF" — a card is one button whose bottom tag is the same badge; every card's name reserves two
-lines so the badges align; the same player can sit in both sections). Photo credits sit at the
-bottom of the home page. Deployed on Railway at **elojourney.com** (Volume at
-`/app/instance` persists the cache).
+"USCF" — a card is one button whose bottom tag is the same badge; every card's name is split into
+two stacked lines, first name(s) / surname, so the badges align; the same player can sit in both
+sections). Photo credits sit at the bottom of the home page. `styles.css` is cache-busted with
+`?v=<mtime>` (context processor in `create_app`) so deploys never render with stale CSS. Deployed
+on Railway at **elojourney.com** (Volume at `/app/instance` persists the cache).
 
 **Architecture (spec 007, Phases 0 & 1):** the SQLite `scrape_cache` holds a **raw,
 DOB/milestone-independent rating timeline**; the per-user milestone/age view is **recomputed per

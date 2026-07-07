@@ -823,11 +823,13 @@ label.fide-birth-opt input[type="checkbox"] {
   font-size: 0.78rem;
   line-height: 1.15;
   text-align: center;
-  /* Reserve two lines for EVERY name (most wrap to first/last name) so the
-     USCF/FIDE badge sits at the same height on every card, aligned across the
-     whole grid — single-line names are centered in the two-line box. */
+  /* The template splits EVERY name into two .preset-name-line spans (first
+     name(s) / surname), stacked here, so the USCF/FIDE badge sits at the same
+     height on every card. min-height keeps a hypothetical one-word name from
+     collapsing the box below two lines. */
   min-height: 2.3em;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
 }

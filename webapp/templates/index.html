@@ -56,7 +56,14 @@
               <img class="preset-photo" loading="lazy" width="64" height="64"
                    src="{{ url_for('static', filename='players/' ~ fp.photo) }}"
                    alt="Portrait of {{ fp.name }}">
-              <span class="preset-name">{{ fp.name }}</span>
+              {# Every name renders as two stacked lines — first name(s), then
+                 surname (split on the LAST space) — so the source badge below
+                 sits at the same height on every card. #}
+              <span class="preset-name">
+                {%- for part in fp.name.rsplit(' ', 1) -%}
+                <span class="preset-name-line">{{ part }}</span>
+                {%- endfor -%}
+              </span>
               <span class="badge badge-{{ section.key }} preset-badge">{{ section.key|upper }}</span>
             </button>
           </li>
