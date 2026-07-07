@@ -779,8 +779,11 @@ label.fide-birth-opt input[type="checkbox"] {
 }
 .featured-section > summary:hover { background: var(--bg); }
 .featured-section[open] > summary { border-bottom: 1px solid var(--border); border-radius: 10px 10px 0 0; }
-.featured-section-label { font-weight: 600; }
-.featured-section > .featured-grid { padding: 0.7rem; }
+/* Section label reuses the yellow/blue source badge (badge badge-uscf|fide),
+   bumped a touch larger so it reads as a header pill. */
+.featured-section-label { font-size: 0.8rem; padding: 0.2rem 0.55rem; }
+/* Extra top padding so the cards aren't squished against the header pill. */
+.featured-section > .featured-grid { padding: 1.15rem 0.7rem 0.9rem; }
 /* A whole card is ONE button: click = add as the section's source. */
 .preset-card {
   display: flex;
@@ -820,6 +823,13 @@ label.fide-birth-opt input[type="checkbox"] {
   font-size: 0.78rem;
   line-height: 1.15;
   text-align: center;
+  /* Reserve two lines for EVERY name (most wrap to first/last name) so the
+     USCF/FIDE badge sits at the same height on every card, aligned across the
+     whole grid — single-line names are centered in the two-line box. */
+  min-height: 2.3em;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 .preset-status { display: block; margin-top: 0.5rem; min-height: 1.2em; }
 .photo-credits { margin-top: 0.85rem; }

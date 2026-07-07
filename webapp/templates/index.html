@@ -36,16 +36,13 @@
         <span class="muted small">Click a player (birthdate included) to add them to the form below.</span>
       </div>
       {% for section in [
-           {"key": "fide", "label": "FIDE", "players": featured_fide,
-            "blurb": "the current world top 15 — added as FIDE analyses"},
-           {"key": "uscf", "label": "USCF", "players": featured_uscf,
-            "blurb": "US-raised players with deep USCF histories — added as USCF analyses"},
+           {"key": "fide", "label": "FIDE", "players": featured_fide},
+           {"key": "uscf", "label": "USCF", "players": featured_uscf},
          ] %}
       {% if section.players %}
       <details class="featured-section" id="featured-{{ section.key }}" {% if loop.first %}open{% endif %}>
         <summary>
-          <span class="featured-section-label">{{ section.label }}</span>
-          <span class="muted small">— {{ section.blurb }}</span>
+          <span class="featured-section-label badge badge-{{ section.key }}">{{ section.label }}</span>
         </summary>
         <ul class="featured-grid" data-source="{{ section.key }}">
           {% for fp in section.players %}
@@ -69,15 +66,6 @@
       {% endif %}
       {% endfor %}
       <span class="field-hint preset-status" id="preset-status" aria-live="polite"></span>
-      <details class="photo-credits">
-        <summary>Photo credits</summary>
-        <ul class="muted small">
-          {% for fp in photo_credits %}
-          <li>{{ fp.name }} — photo by {{ fp.photo_by }}, {{ fp.photo_license }},
-            <a href="{{ fp.photo_source }}" target="_blank" rel="noopener noreferrer">via Wikimedia Commons</a> (resized).</li>
-          {% endfor %}
-        </ul>
-      </details>
     </div>
     {% endif %}
 
@@ -287,6 +275,18 @@
     </form>
   {% endfor %}
 </section>
+{% endif %}
+
+{% if photo_credits %}
+<details class="photo-credits">
+  <summary>Photo credits</summary>
+  <ul class="muted small">
+    {% for fp in photo_credits %}
+    <li>{{ fp.name }} — photo by {{ fp.photo_by }}, {{ fp.photo_license }},
+      <a href="{{ fp.photo_source }}" target="_blank" rel="noopener noreferrer">via Wikimedia Commons</a> (resized).</li>
+    {% endfor %}
+  </ul>
+</details>
 {% endif %}
 
 <script>

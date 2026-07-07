@@ -221,3 +221,20 @@ quick-add.
   language for "which rating system." Markup uses `badge badge-{{key}} preset-badge`; the old
   `.preset-src` CSS (and its hover rule) replaced by a one-line `.preset-badge { margin-top: auto }`
   that keeps the badge pinned to the card bottom so rows align.
+
+## 2026-07-07 (later still) — quick-add header + card alignment polish (owner request)
+- Dropped the section blurbs entirely ("the current world top 15 — added as FIDE analyses" /
+  "US-raised players with deep USCF histories — added as USCF analyses") from the `index.html`
+  section loop — the summaries now show only the source label.
+- The **FIDE / USCF section labels are now the yellow/blue source badges** (added `badge
+  badge-{{key}}` to `.featured-section-label`; CSS bumps its font-size to 0.8rem / padding to
+  0.2rem 0.55rem so the pill reads as a header), matching the per-card badges and the Analysis page.
+- More breathing room between the header pill and the cards: `.featured-section > .featured-grid`
+  top padding 0.7rem → 1.15rem (was squished).
+- **Every card's name box now reserves two lines** (`.preset-name` `min-height: 2.3em` + flex
+  center) so single- and two-line names occupy equal height and the USCF/FIDE badge lands at the
+  same spot on every card, aligned across the whole grid (e.g. Ray Robson → "Ray" / "Robson" / badge).
+- **Photo-credits `<details>` moved to the bottom of the page** — out of the `.featured` block, now
+  after the library section, guarded by `{% if photo_credits %}`.
+- Verified in Playwright (fresh session): badges render yellow/blue, cards' badges align per row,
+  photo credits render last in the DOM (line 590, after the milestone editor).
