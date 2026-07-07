@@ -211,3 +211,13 @@ quick-add.
   real scrape (Sevian 13493815) via the API in 9.5 s with data through Mar 2026; badges + suffixed
   legends confirmed in Playwright. Docs: scraping.md gained a "USCF JSON API — the ONLY default
   source" section (HTML sections re-titled LEGACY); CLAUDE.md header + config.py comments updated.
+
+## 2026-07-07 (later) — home-page quick-add copy + source-badge polish (owner request)
+- Quick-add section headings simplified: "FIDE top 15" → **"FIDE"**, "American stars" → **"USCF"**
+  (blurbs unchanged; `index.html` section loop).
+- FIDE form note now leads with **"Note:"** instead of "Heads up:".
+- Quick-add cards' bottom tag changed from the ad-hoc `+ FIDE` / `+ USCF` pill to the **same
+  `.badge badge-fide` / `.badge badge-uscf` source badge used on the Analysis page** — one visual
+  language for "which rating system." Markup uses `badge badge-{{key}} preset-badge`; the old
+  `.preset-src` CSS (and its hover rule) replaced by a one-line `.preset-badge { margin-top: auto }`
+  that keeps the badge pinned to the card bottom so rows align.

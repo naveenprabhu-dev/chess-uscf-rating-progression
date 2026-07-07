@@ -801,23 +801,11 @@ label.fide-birth-opt input[type="checkbox"] {
 }
 .preset-card:hover { border-color: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08); }
 .preset-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-/* The "+ USCF" / "+ FIDE" tag at the card bottom (visual affordance only —
-   the whole card is the button). */
-.preset-src {
-  font-size: 0.68rem;
-  font-weight: 600;
-  letter-spacing: 0.03em;
-  padding: 0.12rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--accent);
+/* The USCF / FIDE source badge at the card bottom — same pill used on the
+   Analysis page (.badge-uscf / .badge-fide). Visual affordance only; the whole
+   card is the button. */
+.preset-badge {
   margin-top: auto;              /* pin to the card bottom so rows align */
-}
-.preset-card:hover .preset-src {
-  background: #f6efdd;
-  border-color: var(--accent);
-  color: var(--accent-hover);
 }
 .preset-photo {
   width: 64px;

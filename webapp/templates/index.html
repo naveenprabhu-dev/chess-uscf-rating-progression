@@ -19,7 +19,7 @@
               aria-expanded="false" aria-controls="bulk-panel">Paste a FIDE list</button>
       <span class="muted small">Add players one at a time, or paste whole lists — USCF and FIDE mix freely.</span>
     </div>
-    <p class="muted small fide-form-note">Heads up: FIDE analyses have no score % data, and FIDE
+    <p class="muted small fide-form-note">Note: FIDE analyses have no score % data, and FIDE
        rating lists were not monthly before Aug 2012 — so FIDE "months to milestone" is coarser
        for older periods.</p>
 
@@ -36,9 +36,9 @@
         <span class="muted small">Click a player (birthdate included) to add them to the form below.</span>
       </div>
       {% for section in [
-           {"key": "fide", "label": "FIDE top 15", "players": featured_fide,
+           {"key": "fide", "label": "FIDE", "players": featured_fide,
             "blurb": "the current world top 15 — added as FIDE analyses"},
-           {"key": "uscf", "label": "American stars", "players": featured_uscf,
+           {"key": "uscf", "label": "USCF", "players": featured_uscf,
             "blurb": "US-raised players with deep USCF histories — added as USCF analyses"},
          ] %}
       {% if section.players %}
@@ -60,7 +60,7 @@
                    src="{{ url_for('static', filename='players/' ~ fp.photo) }}"
                    alt="Portrait of {{ fp.name }}">
               <span class="preset-name">{{ fp.name }}</span>
-              <span class="preset-src">+ {{ section.key|upper }}</span>
+              <span class="badge badge-{{ section.key }} preset-badge">{{ section.key|upper }}</span>
             </button>
           </li>
           {% endfor %}
