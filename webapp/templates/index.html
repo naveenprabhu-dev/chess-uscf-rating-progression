@@ -17,11 +17,43 @@
               aria-expanded="false" aria-controls="bulk-panel">Paste a USCF list</button>
       <button type="button" class="link-button bulk-open-btn" id="bulk-fide-btn" data-source="fide"
               aria-expanded="false" aria-controls="bulk-panel">Paste a FIDE list</button>
-      <span class="muted small">Add players one at a time, or paste whole lists — USCF and FIDE mix freely.</span>
+      <span class="muted small">If you want to analyze a large number of players, feel free to enter them as a list!</span>
     </div>
     <p class="muted small fide-form-note">Note: FIDE analyses have no score % data, and FIDE
        rating lists were not monthly before Aug 2012 — so FIDE "months to milestone" is coarser
        for older periods.</p>
+
+    {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
+       then "Fill rows" pairs them by position and APPENDS them into the first
+       open rows below, tagged with the panel's source (so a USCF list and a
+       FIDE list can be pasted back-to-back into one mixed batch). Sits ABOVE
+       the quick-add block so it opens right under the buttons that toggle it. #}
+    <div class="bulk-panel" id="bulk-panel" hidden>
+      <div class="bulk-head"><strong id="bulk-heading">Paste a USCF list</strong></div>
+      <div class="bulk-cols">
+        <label class="bulk-col" for="bulk-ids"><span id="bulk-ids-label">USCF IDs</span>
+          <span class="muted small">— one per line (or comma/space separated)</span>
+          <textarea id="bulk-ids" rows="6" spellcheck="false"
+            placeholder="12345678&#10;87654321&#10;13572468"></textarea>
+        </label>
+        <label class="bulk-col" for="bulk-dobs">Birthdays <span class="muted small">(optional)</span>
+          <span class="muted small">— MM/DD/YYYY, same order as the IDs</span>
+          <textarea id="bulk-dobs" rows="6" spellcheck="false"
+            placeholder="01/15/2010&#10;02/20/2011&#10;(leave blank to skip a player)"></textarea>
+        </label>
+      </div>
+      <p class="muted small">
+        Birthdays are matched to IDs <strong>by position</strong>: the 1st birthday pairs with the
+        1st ID, and so on. Birthdays are optional, but any you include must be MM/DD/YYYY.
+        These players are <strong>added</strong> to the rows below — anything already entered stays,
+        so you can paste a USCF list and then a FIDE list.
+      </p>
+      <div class="bulk-actions">
+        <button type="button" class="primary" id="bulk-fill-btn">Fill rows</button>
+        <button type="button" class="link-button" id="bulk-cancel-btn">Cancel</button>
+        <span class="field-hint bulk-status" id="bulk-status" aria-live="polite"></span>
+      </div>
+    </div>
 
     {# Quick add: one-click presets in two dropdown sections — the FIDE top 15
        (added as FIDE analyses) and top American players (added as USCF ones).
@@ -75,37 +107,6 @@
       <span class="field-hint preset-status" id="preset-status" aria-live="polite"></span>
     </div>
     {% endif %}
-
-    {# Bulk-add: paste two lists — all IDs in one box, all birthdays in another —
-       then "Fill rows" pairs them by position and APPENDS them into the first
-       open rows below, tagged with the panel's source (so a USCF list and a
-       FIDE list can be pasted back-to-back into one mixed batch). #}
-    <div class="bulk-panel" id="bulk-panel" hidden>
-      <div class="bulk-head"><strong id="bulk-heading">Paste a USCF list</strong></div>
-      <div class="bulk-cols">
-        <label class="bulk-col" for="bulk-ids"><span id="bulk-ids-label">USCF IDs</span>
-          <span class="muted small">— one per line (or comma/space separated)</span>
-          <textarea id="bulk-ids" rows="6" spellcheck="false"
-            placeholder="12345678&#10;87654321&#10;13572468"></textarea>
-        </label>
-        <label class="bulk-col" for="bulk-dobs">Birthdays <span class="muted small">(optional)</span>
-          <span class="muted small">— MM/DD/YYYY, same order as the IDs</span>
-          <textarea id="bulk-dobs" rows="6" spellcheck="false"
-            placeholder="01/15/2010&#10;02/20/2011&#10;(leave blank to skip a player)"></textarea>
-        </label>
-      </div>
-      <p class="muted small">
-        Birthdays are matched to IDs <strong>by position</strong>: the 1st birthday pairs with the
-        1st ID, and so on. Birthdays are optional, but any you include must be MM/DD/YYYY.
-        These players are <strong>added</strong> to the rows below — anything already entered stays,
-        so you can paste a USCF list and then a FIDE list.
-      </p>
-      <div class="bulk-actions">
-        <button type="button" class="primary" id="bulk-fill-btn">Fill rows</button>
-        <button type="button" class="link-button" id="bulk-cancel-btn">Cancel</button>
-        <span class="field-hint bulk-status" id="bulk-status" aria-live="polite"></span>
-      </div>
-    </div>
 
     {# Template row cloned by JS. __IDX__ is replaced with the 0-based index.
        Each row carries its OWN source (USCF/FIDE radio pair), and the hidden ID

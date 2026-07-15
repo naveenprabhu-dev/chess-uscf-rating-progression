@@ -28,7 +28,20 @@ user's own **library** (`session["saved"]`, cap 5 per browser) ∪ their most-re
 timelines auto-re-scrape once past `CACHE_TTL_DAYS` (7) on analyze — the only re-scrape path (manual
 refresh is gone). Firebase Phases 2–4 (login, 100-cap, anon→uid) are not done.
 
-## Most recent session — 2026-07-07: 2700chess verification → 2002 gap filled + quick-add dropdowns
+## Most recent session — 2026-07-15: quick-add card width + paste-list copy (small UI)
+- **Quick-add cards widened** so long surnames fit inside the frame: `.featured-grid` min column
+  width 84px → 116px (a min-width card leaves ~104px of content; "Praggnanandhaa" measures ~99px at
+  the 0.78rem name size — verified in headless Chrome against the real stylesheet). Safety net:
+  `.preset-name-line { max-width: 100%; overflow-wrap: anywhere }` wraps inside the card on any
+  platform whose font renders wider, instead of spilling out.
+- **Paste-list helper text** next to the two buttons now reads "If you want to analyze a large
+  number of players, feel free to enter them as a list!" (owner-requested copy).
+- **Bulk panel moved above quick-add** in `index.html` (same markup, just relocated): opening
+  "Paste a USCF/FIDE list" now reveals the textareas directly under the buttons instead of below
+  the quick-add grid. All JS targets it by id, so nothing else changed.
+- No cache-bust needed: `css_version` is the stylesheet's mtime, set at boot.
+
+## Previous session — 2026-07-07: 2700chess verification → 2002 gap filled + quick-add dropdowns
 Verified the FIDE scraper per-period against 2700chess.com (owner request, ground truth) for
 Carlsen, Anand, Sindarov, Niemann, Aronian; fixed what was fixable; reworked quick-add.
 - **New `scraper/fide_archive.py`:** the old "accepted" Jan 2002 – Jan 2003 gap is now FILLED from
@@ -55,7 +68,7 @@ Carlsen, Anand, Sindarov, Niemann, Aronian; fixed what was fixable; reworked qui
   analyze picker, chart legends/tooltips, and the library list (player + progress pages already had
   them).
 
-## Previous session — 2026-07-01 (later): FIDE first-class + OlimpBase pre-2003 backfill
+## Earlier session — 2026-07-01 (later): FIDE first-class + OlimpBase pre-2003 backfill
 FIDE went from "coming soon" to fully enabled (spec 005 Phase 6 landed, reworked per owner):
 - **Per-row source:** the analyze form's USCF/FIDE choice is per row (`source_N`), so one batch mixes
   sources; "Paste a list" is two buttons (USCF / FIDE list) whose fills **append** rather than replace.

@@ -252,3 +252,31 @@ quick-add.
   global set in `create_app` to the file's mtime at boot. Every deploy rewrites the file → fresh
   mtime → browsers re-fetch, so a redeployed page can no longer render with stale cached CSS (the
   root cause of "localhost looks different than the committed site").
+
+## 2026-07-15 — quick-add card width + paste-list copy (owner request)
+- **"R. Praggnanandhaa" now fits in his quick-add card**: `.featured-grid` minimum column width
+  84px → 116px. Measured in headless Chrome against the real stylesheet: the surname renders at
+  ~99px at the 0.78rem name size, so the old minimum-width card (~72px of content) could never
+  hold it on one line; a 116px card leaves ~104px. Verified post-change: card=116px,
+  surname=98.7px, no overflow, name still two lines (badge alignment preserved). Added
+  `.preset-name-line { max-width: 100%; overflow-wrap: anywhere }` as a guard so a wider-rendering
+  platform font wraps inside the frame instead of spilling out.
+- **Paste-list helper text** (`index.html`, next to the "Paste a USCF/FIDE list" buttons) changed
+  to "If you want to analyze a large number of players, feel free to enter them as a list!".
+- **Bulk-add panel moved above the quick-add block** (owner follow-up): the `#bulk-panel` markup
+  relocated verbatim so it opens directly under the paste buttons rather than below the quick-add
+  grid. JS is id-based, no logic changes. Smoke-tested via the Flask test client: page renders,
+  exactly one panel, and it precedes `#featured` in the DOM.
+- CSS cache-busting is automatic (`css_version` = stylesheet mtime), so no manual bump.
+
+## 2026-07-15 — API_REFERENCE.md added (docs only, no code change)
+- New root-level `API_REFERENCE.md`: reference for every network call per player (USCF + FIDE) —
+  exact endpoints, call-count math (API caps pages at 100 despite `Size=200`), the two-layer USCF
+  retry/backoff (`_GET_RETRY_WAITS=(1,4)` per request + `USCF_API_RETRY_WAITS=(5,15,30)` per
+  scrape, Retry-After honored on 429), FIDE's ~2-request scrape + veteran backfill costs, the
+  permanent-vs-TTL cache tables, and curl one-liners for health checks (including how to tell a
+  Railway outage from a USCF outage).
+- Context: elojourney.com appeared "broken" today; diagnosis showed the USCF API was healthy and
+  Railway was serving `{"code":404,"message":"Application not found"}` (service down/unbound).
+  After Railway came back, verified the full production flow end-to-end (search → POST /scrape →
+  SSE stream → fresh USCF API scrape of an uncached player → /analyze 200).

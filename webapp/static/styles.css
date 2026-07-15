@@ -762,7 +762,9 @@ label.fide-birth-opt input[type="checkbox"] {
   padding: 0;
   display: grid;
   gap: 0.6rem;
-  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  /* 116px min leaves ~104px of content width per card — enough for the longest
+     surname on one line ("Praggnanandhaa" ≈ 99px at 0.78rem). */
+  grid-template-columns: repeat(auto-fill, minmax(116px, 1fr));
 }
 .featured-grid li { margin: 0; }
 /* The two quick-add dropdown sections (FIDE top 15 / American USCF stars) */
@@ -833,6 +835,9 @@ label.fide-birth-opt input[type="checkbox"] {
   align-items: center;
   justify-content: center;
 }
+/* If a platform's font still renders a name line wider than the card, wrap it
+   inside the frame instead of overflowing. */
+.preset-name-line { max-width: 100%; overflow-wrap: anywhere; }
 .preset-status { display: block; margin-top: 0.5rem; min-height: 1.2em; }
 .photo-credits { margin-top: 0.85rem; }
 .photo-credits summary {
