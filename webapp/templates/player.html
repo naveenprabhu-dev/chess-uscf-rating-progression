@@ -69,8 +69,7 @@
       <button type="submit" class="primary">☆ Save to library ({{ saved_count }}/{{ anon_limit }})</button>
     </form>
   {% endif %}
-  <a href="{{ url_for('main.compare', ids=[player.source ~ ':' ~ player.player_id]) }}">View charts</a>
-  <a href="{{ url_for('main.index') }}" class="muted">← back</a>
+  <a href="{{ url_for('main.compare', ids=[player.source ~ ':' ~ player.player_id]) }}" class="link-button">View charts</a>
 </section>
 
 {% if stale %}
